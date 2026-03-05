@@ -36,17 +36,33 @@ A fast, modern, and **100% private** web application offering a comprehensive su
 
 ### Local Development
 
-1. Install dependencies:
-```bash
-npm install
-```
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/arungupta1526/pdf-tools.git
+   cd pdf-tools
+   ```
 
-2. Run the development server:
-```bash
-npm run dev
-```
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
 
-3. Open [http://localhost:3000](http://localhost:3000) with your browser.
+3. **Run the development server**:
+   ```bash
+   npm run dev
+   ```
+
+4. **Build for production**:
+   ```bash
+   npm run build
+   ```
+
+5. **Run the production server**:
+   ```bash
+   npm run start
+   ```
+
+6. Open [http://localhost:3000](http://localhost:3000) with your browser.
 
 ### 🐳 Run with Docker (Recommended for Self-Hosting)
 
