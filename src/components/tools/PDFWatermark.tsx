@@ -64,7 +64,7 @@ export default function PDFWatermark() {
             ctx.fillText(text, -textWidth / 2, 0);
             ctx.restore();
         } else {
-            let x = (size.w - textWidth) / 2;
+            const x = (size.w - textWidth) / 2;
             let y: number;
             if (position === 'center') { y = size.h / 2; }
             else if (position === 'top') { y = scaledFontSize + 20; }
@@ -120,7 +120,7 @@ export default function PDFWatermark() {
                 const page = pages[i];
                 const { width, height } = page.getSize();
                 const textWidth = font.widthOfTextAtSize(text, fontSize);
-                let x = (width - textWidth) / 2;
+                const x = (width - textWidth) / 2;
                 let y: number;
                 let rotate = degrees(0);
                 if (position === 'diagonal') { y = height / 2; rotate = degrees(45); }

@@ -98,7 +98,7 @@ export default function PDFPageNumbers() {
             for (let i = 0; i < pages.length; i++) {
                 setProgress(`Page ${i + 1}/${pages.length}…`);
                 const page = pages[i];
-                const { width, height } = page.getSize();
+                const { width } = page.getSize();
                 const text = `${prefix}${startNum + i}`;
                 const textWidth = font.widthOfTextAtSize(text, fontSize);
                 let x: number;

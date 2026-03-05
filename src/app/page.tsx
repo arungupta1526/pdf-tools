@@ -19,8 +19,6 @@ const TOOLS = [
   { href: '/metadata', icon: '✏️', title: 'Edit Metadata', desc: 'Edit title, author, subject, keywords, creator.', color: 'from-emerald-600/20 to-teal-600/20 border-emerald-500/30', tag: 'Edit' },
 ];
 
-const TAGS = ['All', 'Pages', 'Color', 'Edit', 'Security', 'Optimize', 'Convert', 'Extract'];
-
 export default function Home() {
   return (
     <main className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">

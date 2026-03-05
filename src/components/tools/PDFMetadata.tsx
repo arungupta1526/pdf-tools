@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import DropZone from '@/components/DropZone';
 import ToolHeader from '@/components/ToolHeader';
 
