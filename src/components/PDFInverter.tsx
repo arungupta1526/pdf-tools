@@ -52,6 +52,18 @@ function extractDominantColors(data: Uint8ClampedArray, w: number, h: number, co
         .slice(0, count);
 }
 
+// ─── Preset Colors ───────────────────────────────────────────────────────────
+
+const PRESET_COLORS: { label: string; hex: string; bg: string }[] = [
+    { label: 'Standard', hex: '', bg: 'bg-gradient-to-br from-white to-gray-900' },
+    { label: 'Sepia', hex: '#c8a96e', bg: 'bg-[#c8a96e]' },
+    { label: 'Night', hex: '#1a1a2e', bg: 'bg-[#1a1a2e]' },
+    { label: 'Matrix', hex: '#00ff41', bg: 'bg-[#00ff41]' },
+    { label: 'Ocean', hex: '#4a90d9', bg: 'bg-[#4a90d9]' },
+    { label: 'Violet', hex: '#9b59b6', bg: 'bg-[#9b59b6]' },
+    { label: 'Ember', hex: '#e25822', bg: 'bg-[#e25822]' },
+];
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -306,8 +318,29 @@ export default function PDFInverter() {
                         {/* ── Color Section ── */}
                         <div>
                             <label className="block text-xs text-gray-400 font-semibold uppercase tracking-wider mb-2.5">
-                                Custom Invert Color <span className="text-gray-600 font-normal normal-case">(optional)</span>
+                                Invert Color <span className="text-gray-600 font-normal normal-case">(optional)</span>
                             </label>
+
+                            {/* Preset color chips */}
+                            <div className="mb-3">
+                                <p className="text-xs text-gray-500 mb-2">Presets:</p>
+                                <div className="flex flex-wrap gap-2">
+                                    {PRESET_COLORS.map((preset) => (
+                                        <button
+                                            key={preset.label}
+                                            title={preset.label + (preset.hex ? ` (${preset.hex})` : ' — standard')}
+                                            onClick={() => setHexColor(preset.hex)}
+                                            className={`flex flex-col items-center gap-1 group`}
+                                        >
+                                            <span className={`w-8 h-8 rounded-lg border-2 block transition-all hover:scale-110 active:scale-95 ${preset.bg} ${hexColor === preset.hex
+                                                    ? 'border-white shadow-md scale-110'
+                                                    : 'border-gray-600 hover:border-gray-400'
+                                                }`} />
+                                            <span className="text-[10px] text-gray-500 group-hover:text-gray-300 transition-colors">{preset.label}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
 
                             {swatches.length > 0 && (
                                 <div className="mb-3">
