@@ -2,6 +2,10 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+### 🐳 Run with Docker (Recommended for Self-Hosting)
+We provide a fully containerized setup using Docker. For full instructions on how to build and run the PDF Tools Suite container, please see the **[Docker Setup Guide](DOCKER.md)**.
+
+### Local Development
 First, run the development server:
 
 ```bash
