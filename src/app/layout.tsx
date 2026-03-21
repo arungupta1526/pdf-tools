@@ -13,6 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://arungupta1526.github.io/pdf-tools/"),
   title: "PDF Tools - All-in-one PDF Utility | 100% Free & Secure",
   description:
     "Free online PDF tools: Merge, Split, Compress, Invert, Grayscale, Reorder, Rotate, Protect, Sign, and more. 100% local processing in your browser — your files never leave your device.",
