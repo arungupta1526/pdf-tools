@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://arungupta1526.github.io/pdf-tools/sitemap.xml

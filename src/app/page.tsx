@@ -12,7 +12,7 @@ const TOOLS = [
     tag: "Color",
   },
   {
-    href: "/nup",
+    href: "/pages-per-sheet",
     icon: "📐",
     title: "Pages Per Sheet",
     desc: "Arrange 2, 4, 6, 8, 9, or 16 pages on a single sheet.",

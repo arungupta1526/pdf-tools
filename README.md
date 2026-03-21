@@ -35,6 +35,12 @@ A fast, modern, and **100% private** web application offering a comprehensive su
 16. **🔓 Unlock PDF**: Remove passwords and encryption (requires knowing the current password).
 17. **📝 Extract Text**: Extract all readable text from a PDF. View in-browser, copy to clipboard, or download as a `.txt` file.
 
+### 🔒 Privacy & SEO
+
+- **100% Local**: No files are uploaded. All processing is done via WebAssembly (`pdf-lib`) and JavaScript in your browser.
+- **SEO Ready**: Full metadata integration, `robots.txt`, and `sitemap.xml` for better discovery.
+- **Modern UI**: Dark-themed, responsive design with glassmorphism effects.
+
 ---
 
 ## 🚀 Getting Started
@@ -90,7 +96,7 @@ A fully containerized setup is available. See the **[Docker Setup Guide](DOCKER.
 ## 📬 Contact
 
 - **GitHub**: [github.com/arungupta1526](https://github.com/arungupta1526)
-- **Email**: arungupta1526@gmail.com
+- **LinkedIn**: [linkedin.com/in/arungupta1526](https://linkedin.com/in/arungupta1526)
 
 ---
 
