@@ -5,7 +5,7 @@ import DropZone from '@/components/DropZone';
 import ToolHeader from '@/components/ToolHeader';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
-type SignMode = 'draw' | 'type';
+type SignMode = 'draw' | 'type' | 'upload';
 
 const MM = 2.835; // mm to PDF points
 
@@ -26,17 +26,24 @@ export default function PDFSign() {
     const [typedText, setTypedText] = useState('');
     const [typedFont, setTypedFont] = useState<'cursive' | 'serif' | 'monospace'>('cursive');
     const [sigColor, setSigColor] = useState('#1a1a2e');
+    const [sigThickness, setSigThickness] = useState(3);
 
     // Canvas drawing
     const sigCanvasRef = useRef<HTMLCanvasElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
     const [lastPos, setLastPos] = useState<{ x: number; y: number } | null>(null);
     const [hasDrawn, setHasDrawn] = useState(false);
+    const [uploadedSig, setUploadedSig] = useState<string | null>(null);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const sigImageInputRef = useRef<HTMLInputElement>(null);
 
     // Placement (mm)
     const [sigX, setSigX] = useState(50);
     const [sigY, setSigY] = useState(20);
     const [sigW, setSigW] = useState(60);
+    const [isSelected, setIsSelected] = useState(false);
+
+    const [dragInfo, setDragInfo] = useState<{ startX: number; startY: number; initialX: number; initialY: number; initialScrollY: number } | null>(null);
 
     const fileRef = useRef<File | null>(null);
     const pdfJsDocRef = useRef<{ getPage: (n: number) => Promise<unknown> } | null>(null);
@@ -117,19 +124,22 @@ export default function PDFSign() {
         const ctx = sigCanvasRef.current.getContext('2d')!;
         const pos = getPos(e);
         ctx.beginPath(); ctx.moveTo(lastPos!.x, lastPos!.y); ctx.lineTo(pos.x, pos.y);
-        ctx.strokeStyle = sigColor; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.strokeStyle = sigColor; ctx.lineWidth = sigThickness; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
         ctx.stroke(); setLastPos(pos);
     };
     const endDraw = () => setIsDrawing(false);
     const clearCanvas = () => {
         if (!sigCanvasRef.current) return;
-        sigCanvasRef.current.getContext('2d')!.clearRect(0, 0, 500, 150);
+        sigCanvasRef.current.getContext('2d')!.clearRect(0, 0, 500, 300);
         setHasDrawn(false);
     };
     useEffect(() => { clearCanvas(); }, [sigColor]);
 
     // ─── Get signature as data URL ────────────────────────────────────────────
     const getSignatureDataUrl = useCallback((): string | null => {
+        if (signMode === 'upload') {
+            return uploadedSig;
+        }
         if (signMode === 'draw') {
             if (!hasDrawn || !sigCanvasRef.current) return null;
             return sigCanvasRef.current.toDataURL('image/png');
@@ -141,7 +151,28 @@ export default function PDFSign() {
         ctx.font = `60px ${typedFont}`; ctx.fillStyle = sigColor;
         ctx.textBaseline = 'middle'; ctx.fillText(typedText, 10, 60);
         return offscreen.toDataURL('image/png');
-    }, [signMode, hasDrawn, typedText, typedFont, sigColor]);
+    }, [signMode, uploadedSig, hasDrawn, typedText, typedFont, sigColor]);
+
+    const processImageFile = useCallback((file: File) => {
+        if (!file.type.startsWith('image/')) return;
+        setIsProcessing(true);
+        const reader = new FileReader();
+        reader.onload = (re) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width; canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx?.drawImage(img, 0, 0);
+                setUploadedSig(canvas.toDataURL('image/png'));
+                setIsProcessing(false);
+            };
+            img.onerror = () => setIsProcessing(false);
+            img.src = re.target?.result as string;
+        };
+        reader.onerror = () => setIsProcessing(false);
+        reader.readAsDataURL(file);
+    }, []);
 
     // ─── Live preview overlay computation ────────────────────────────────────
     // Convert mm position → preview px position
@@ -155,7 +186,11 @@ export default function PDFSign() {
     const handleProcess = async () => {
         if (!fileRef.current) return;
         const sigDataUrl = getSignatureDataUrl();
-        if (!sigDataUrl) { setErrorMsg('Please draw or type your signature first.'); return; }
+        if (!sigDataUrl) {
+            const msg = signMode === 'upload' ? 'Please upload your signature image.' : 'Please draw or type your signature first.';
+            setErrorMsg(msg);
+            return;
+        }
         setStatus('processing'); setErrorMsg('');
 
         try {
@@ -194,6 +229,38 @@ export default function PDFSign() {
     const isActive = status === 'ready' || status === 'processing' || status === 'done';
     const sigDataUrl = isActive ? getSignatureDataUrl() : null;
 
+    // ─── Drag-to-move handlers ────────────────────────────────────────────────
+    const handleMouseMove = useCallback((e: MouseEvent) => {
+        if (!dragInfo) return;
+        
+        // Auto-scroll logic if dragging near viewport edges
+        const threshold = 80;
+        const speed = 10;
+        if (e.clientY < threshold) window.scrollBy({ top: -speed, behavior: 'auto' });
+        else if (e.clientY > window.innerHeight - threshold) window.scrollBy({ top: speed, behavior: 'auto' });
+
+        const dx = (e.clientX - dragInfo.startX) / (MM * pxPerPoint);
+        const dy = (e.clientY - dragInfo.startY + (window.scrollY - dragInfo.initialScrollY)) / (MM * pxPerPoint);
+        
+        setSigX(Math.max(0, Math.round(dragInfo.initialX + dx)));
+        setSigY(Math.max(0, Math.round(dragInfo.initialY + dy)));
+    }, [dragInfo, pxPerPoint]);
+
+    const handleMouseUp = () => setDragInfo(null);
+    useEffect(() => {
+        if (dragInfo) {
+            window.addEventListener('mousemove', handleMouseMove as never);
+            window.addEventListener('mouseup', handleMouseUp);
+        } else {
+            window.removeEventListener('mousemove', handleMouseMove as never);
+            window.removeEventListener('mouseup', handleMouseUp);
+        }
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove as never);
+            window.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [dragInfo, handleMouseMove]);
+
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="✍️" title="Sign PDF" />
@@ -209,10 +276,10 @@ export default function PDFSign() {
                                 <div>
                                     <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider block mb-2">Signature Mode</label>
                                     <div className="flex gap-2">
-                                        {(['draw', 'type'] as const).map(m => (
+                                        {(['draw', 'type', 'upload'] as const).map(m => (
                                             <button key={m} onClick={() => setSignMode(m)}
                                                 className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${signMode === m ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
-                                                {m === 'draw' ? '✏️ Draw' : '⌨️ Type'}
+                                                {m === 'draw' ? '✏️ Draw' : m === 'type' ? '⌨️ Type' : '📁 Upload'}
                                             </button>
                                         ))}
                                     </div>
@@ -229,6 +296,13 @@ export default function PDFSign() {
                                     <input type="color" value={sigColor} onChange={e => setSigColor(e.target.value)}
                                         className="w-7 h-7 rounded-full cursor-pointer border-0 bg-transparent" title="Custom" />
                                 </div>
+                                
+                                {/* Signature Thickness */}
+                                <div>
+                                    <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider block mb-2">Pen Thickness: {sigThickness}px</label>
+                                    <input type="range" min={1} max={10} step={0.5} value={sigThickness} onChange={e => setSigThickness(+e.target.value)}
+                                        className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500" />
+                                </div>
 
                                 {/* Draw / Type panel */}
                                 {signMode === 'draw' ? (
@@ -237,16 +311,16 @@ export default function PDFSign() {
                                             <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Draw Signature</label>
                                             <button onClick={clearCanvas} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">✕ Clear</button>
                                         </div>
-                                        <canvas ref={sigCanvasRef} width={500} height={150}
+                                        <canvas ref={sigCanvasRef} width={500} height={300}
                                             onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
                                             onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
                                             className="w-full rounded-xl border-2 border-dashed border-gray-600 bg-white cursor-crosshair touch-none"
-                                            style={{ aspectRatio: '500/150' }} />
+                                            style={{ aspectRatio: '500/300' }} />
                                         {!hasDrawn && <p className="text-xs text-gray-600 text-center mt-1">Draw your signature above</p>}
                                     </div>
-                                ) : (
+                                ) : signMode === 'type' ? (
                                     <div className="flex flex-col gap-3">
-                                        <input type="text" value={typedText} onChange={e => setTypedText(e.target.value)}
+                                        <input type="text" value={typedText || ''} onChange={e => setTypedText(e.target.value)}
                                             placeholder="Your name…"
                                             className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-600 focus:border-indigo-500 focus:outline-none" />
                                         <div className="flex gap-2">
@@ -263,6 +337,49 @@ export default function PDFSign() {
                                                 <span style={{ fontFamily: typedFont, color: sigColor, fontSize: 32 }}>{typedText}</span>
                                             </div>
                                         )}
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col gap-3">
+                                        <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Upload Signature Image</label>
+                                        <input type="file" ref={sigImageInputRef} className="hidden" accept="image/*"
+                                            onChange={e => {
+                                                const f = e.target.files?.[0];
+                                                if (f) processImageFile(f);
+                                            }} />
+                                        <button 
+                                            onClick={() => sigImageInputRef.current?.click()}
+                                            onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
+                                            onDrop={e => {
+                                                e.preventDefault(); e.stopPropagation();
+                                                const f = e.dataTransfer.files?.[0];
+                                                if (f) processImageFile(f);
+                                            }}
+                                            className={`w-full py-6 rounded-xl border-2 border-dashed transition-all flex flex-col items-center gap-3 group relative overflow-hidden ${
+                                                uploadedSig ? 'border-indigo-500/30 bg-indigo-500/5' : 'border-gray-700 bg-gray-800/50 hover:bg-gray-800 hover:border-indigo-500/50'
+                                            }`}>
+                                            {isProcessing ? (
+                                                <div className="flex flex-col items-center gap-2 py-2">
+                                                    <div className="w-8 h-8 border-3 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin"></div>
+                                                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest animate-pulse">Processing…</span>
+                                                </div>
+                                            ) : uploadedSig ? (
+                                                <div className="relative w-full px-4 flex items-center justify-center animate-in fade-in zoom-in duration-300">
+                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                    <img src={uploadedSig} alt="Uploaded" className="max-h-24 object-contain" />
+                                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-lg">
+                                                        <span className="text-xs font-bold text-white">Click to Change</span>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <span className="text-3xl opacity-50 group-hover:scale-110 group-hover:rotate-6 transition-all duration-300">🖼️</span>
+                                                    <div className="flex flex-col items-center">
+                                                        <span className="text-sm text-gray-400 font-medium tracking-tight">Click or Drag Image</span>
+                                                        <span className="text-[10px] text-gray-600 uppercase tracking-widest mt-0.5">PNG, JPG, WebP</span>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </button>
                                     </div>
                                 )}
 
@@ -315,7 +432,8 @@ export default function PDFSign() {
                             {/* Right: live page preview */}
                             <div className="flex flex-col gap-2">
                                 <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Live Preview</label>
-                                <div className="relative rounded-xl overflow-hidden border border-gray-700/50 bg-gray-800 flex items-center justify-center"
+                                <div className="relative rounded-xl overflow-hidden border border-gray-700/50 bg-gray-800 flex items-center justify-center cursor-crosshair"
+                                    onClick={() => setIsSelected(false)}
                                     style={{ aspectRatio: `${pageThumbW || 210} / ${pageThumbH || 297}` }}>
                                     {pageThumb ? (
                                         <>
@@ -324,17 +442,40 @@ export default function PDFSign() {
 
                                             {/* Signature overlay */}
                                             {sigDataUrl && pageThumbW > 0 && (
-                                                <div className="absolute inset-0 pointer-events-none" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}>
+                                                <div className="absolute inset-0" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
                                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                                     <img
                                                         src={sigDataUrl}
                                                         alt="Signature overlay"
+                                                        onMouseDown={(e) => {
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                            setIsSelected(true);
+                                                            setDragInfo({
+                                                                startX: e.clientX,
+                                                                startY: e.clientY,
+                                                                initialX: sigX,
+                                                                initialY: sigY,
+                                                                initialScrollY: window.scrollY
+                                                            });
+                                                        }}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setIsSelected(true);
+                                                        }}
                                                         style={{
                                                             position: 'absolute',
                                                             left: `${(previewSigX / pageThumbW) * 100}%`,
                                                             top: `${(previewSigY / pageThumbH) * 100}%`,
                                                             width: `${(previewSigW / pageThumbW) * 100}%`,
                                                             objectFit: 'contain',
+                                                            pointerEvents: 'auto',
+                                                            cursor: 'move',
+                                                            userSelect: 'none',
+                                                            border: isSelected ? '2px solid #6366f1' : '1px solid transparent',
+                                                            boxShadow: isSelected ? '0 0 0 4px rgba(99, 102, 241, 0.2)' : 'none',
+                                                            borderRadius: '4px',
+                                                            transition: 'border 0.2s, box-shadow 0.2s'
                                                         }}
                                                     />
                                                 </div>

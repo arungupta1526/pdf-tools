@@ -92,6 +92,14 @@ const TOOLS = [
     tag: "Edit",
   },
   {
+    href: "/edit",
+    icon: "🎨",
+    title: "Edit PDF",
+    desc: "Add multiple signature/image layers. Move, resize, and delete.",
+    color: "from-blue-600/20 to-cyan-600/20 border-blue-500/30",
+    tag: "Creative",
+  },
+  {
     href: "/img-to-pdf",
     icon: "🖼️",
     title: "Images → PDF",
