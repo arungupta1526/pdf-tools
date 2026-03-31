@@ -2,7 +2,9 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
 type SignMode = 'draw' | 'type' | 'upload';
@@ -14,6 +16,7 @@ export default function PDFSign() {
     const [fileName, setFileName] = useState('');
     const [errorMsg, setErrorMsg] = useState('');
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+    const isCancelledRef = useRef(false);
     const [pageCount, setPageCount] = useState(0);
     const [targetPage, setTargetPage] = useState(1);
     const [pageThumb, setPageThumb] = useState<string | null>(null);   // data URL of current page render
@@ -192,10 +195,12 @@ export default function PDFSign() {
             return;
         }
         setStatus('processing'); setErrorMsg('');
+        isCancelledRef.current = false;
 
         try {
             const { PDFDocument } = await import('pdf-lib');
             const fileBytes = new Uint8Array(await fileRef.current.arrayBuffer());
+            if (isCancelledRef.current) { setStatus('ready'); return; }
             const doc = await PDFDocument.load(fileBytes);
             const page = doc.getPage(targetPage - 1);
             const { height: pageH } = page.getSize();
@@ -203,6 +208,7 @@ export default function PDFSign() {
             const base64 = sigDataUrl.split(',')[1];
             const imgBytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
             const img = await doc.embedPng(imgBytes);
+            if (isCancelledRef.current) { setStatus('ready'); return; }
 
             const drawW = sigW * MM;
             const aspectRatio = img.height / img.width;
@@ -215,6 +221,7 @@ export default function PDFSign() {
                 height: drawH,
             });
 
+            if (isCancelledRef.current) { setStatus('ready'); return; }
             const outBytes = await doc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
             setDownloadUrl(URL.createObjectURL(blob));
@@ -264,7 +271,12 @@ export default function PDFSign() {
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="✍️" title="Sign PDF" />
-            <div className="flex-1 p-6 max-w-5xl mx-auto w-full">
+            <div className="flex-1 p-6 max-w-5xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="✍️" 
+                    title="PDF Sign" 
+                    description="Add your signature or images to PDF documents interactively." 
+                />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-5">
                     <DropZone onFile={handleFile} fileName={fileName} />
 
@@ -414,10 +426,13 @@ export default function PDFSign() {
                                 )}
 
                                 {/* Actions */}
-                                <button onClick={handleProcess} disabled={status === 'processing'}
-                                    className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                                    {status === 'processing' ? <><span className="animate-spin">⏳</span> Signing…</> : '✍️ Sign & Download'}
-                                </button>
+                                <ProcessingButton
+                                    onClick={handleProcess}
+                                    onCancel={() => { isCancelledRef.current = true; }}
+                                    isProcessing={status === 'processing'}
+                                    idleLabel="✍️ Sign & Download"
+                                    processingLabel="Signing…"
+                                />
 
                                 {status === 'done' && downloadUrl && (
                                     <a href={downloadUrl} download={`signed-${fileName}`}

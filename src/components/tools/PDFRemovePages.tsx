@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useState, useRef, useCallback } from 'react';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 import DropZone from '@/components/DropZone';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
@@ -17,6 +19,7 @@ export default function PDFRemovePages() {
     const [errorMsg, setErrorMsg] = useState('');
     const [thumbs, setThumbs] = useState<PageThumb[]>([]);
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+    const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
     const pdfjsDocRef = useRef<PdfjsDoc>(null);
 
@@ -53,13 +56,16 @@ export default function PDFRemovePages() {
         if (toKeep.length === 0) { setErrorMsg('Cannot remove all pages.'); return; }
         if (toKeep.length === thumbs.length) { setErrorMsg('No pages marked for removal.'); return; }
         setStatus('processing'); setErrorMsg('');
+        isCancelledRef.current = false;
         try {
             const { PDFDocument } = await import('pdf-lib');
             const srcBytes = await fileRef.current.arrayBuffer();
             const srcDoc = await PDFDocument.load(srcBytes);
             const newDoc = await PDFDocument.create();
             const pages = await newDoc.copyPages(srcDoc, toKeep);
+            if (isCancelledRef.current) { setStatus('ready'); return; }
             pages.forEach(p => newDoc.addPage(p));
+            if (isCancelledRef.current) { setStatus('ready'); return; }
             const outBytes = await newDoc.save();
             setDownloadUrl(URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' })));
             setStatus('done');
@@ -72,6 +78,11 @@ export default function PDFRemovePages() {
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="🗑️" title="Remove Pages" />
             <div className="flex-1 p-6 max-w-3xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="🗑️" 
+                    title="PDF Remove Pages" 
+                    description="Remove unwanted pages from your PDF document." 
+                />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-4">
                     <DropZone onFile={handleFile} fileName={fileName} />
                     {thumbs.length > 0 && (
@@ -95,10 +106,15 @@ export default function PDFRemovePages() {
                                     </button>
                                 ))}
                             </div>
-                            <button onClick={handleRemove} disabled={status === 'processing' || markedCount === 0}
-                                className="w-full py-3 rounded-xl font-semibold text-sm bg-red-600 hover:bg-red-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                                {status === 'processing' ? <><span className="animate-spin">⏳</span>Processing…</> : `🗑️ Remove ${markedCount} Page${markedCount !== 1 ? 's' : ''}`}
-                            </button>
+                            <ProcessingButton
+                                onClick={handleRemove}
+                                onCancel={() => { isCancelledRef.current = true; }}
+                                disabled={markedCount === 0}
+                                isProcessing={status === 'processing'}
+                                idleLabel={`🗑️ Remove ${markedCount} Page${markedCount !== 1 ? 's' : ''}`}
+                                processingLabel="Processing…"
+                                className="bg-red-600 hover:bg-red-500"
+                            />
                             {status === 'done' && downloadUrl && (
                                 <a href={downloadUrl} download={`trimmed-${fileName}`}
                                     className="w-full py-3 rounded-xl font-semibold text-sm text-center bg-emerald-600 hover:bg-emerald-500 transition-all flex items-center justify-center gap-2">

@@ -2,7 +2,9 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -12,6 +14,7 @@ export default function PDFPageNumbers() {
     const [errorMsg, setErrorMsg] = useState('');
     const [progress, setProgress] = useState('');
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+    const isCancelledRef = useRef(false);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [previewLoading, setPreviewLoading] = useState(false);
 
@@ -88,6 +91,7 @@ export default function PDFPageNumbers() {
     const handleProcess = async () => {
         if (!fileRef.current) return;
         setStatus('processing'); setErrorMsg('');
+        isCancelledRef.current = false;
         try {
             const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
             const bytes = await fileRef.current.arrayBuffer();
@@ -96,6 +100,7 @@ export default function PDFPageNumbers() {
             const pages = doc.getPages();
 
             for (let i = 0; i < pages.length; i++) {
+                if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
                 setProgress(`Page ${i + 1}/${pages.length}…`);
                 const page = pages[i];
                 const { width } = page.getSize();
@@ -108,6 +113,7 @@ export default function PDFPageNumbers() {
                 page.drawText(text, { x, y: 15, size: fontSize, font, color: rgb(0.3, 0.3, 0.3) });
             }
 
+            if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             const outBytes = await doc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
             setDownloadUrl(URL.createObjectURL(blob));
@@ -118,7 +124,12 @@ export default function PDFPageNumbers() {
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="🔢" title="PDF Page Numbers" />
-            <div className="flex-1 p-6 max-w-4xl mx-auto w-full">
+            <div className="flex-1 p-6 max-w-4xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="🔢" 
+                    title="PDF Page Numbers" 
+                    description="Add page numbers to your PDF with custom positioning and style." 
+                />
                 <div className="flex flex-col lg:flex-row gap-5">
 
                     {/* ── Left: Controls ── */}
@@ -158,10 +169,13 @@ export default function PDFPageNumbers() {
                                         </div>
                                     </div>
 
-                                    <button onClick={handleProcess} disabled={status === 'processing'}
-                                        className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                                        {status === 'processing' ? <><span className="animate-spin">⏳</span>{progress}</> : '🔢 Add Page Numbers'}
-                                    </button>
+                                    <ProcessingButton
+                                        onClick={handleProcess}
+                                        onCancel={() => { isCancelledRef.current = true; }}
+                                        isProcessing={status === 'processing'}
+                                        idleLabel="🔢 Add Page Numbers"
+                                        processingLabel={progress || 'Processing…'}
+                                    />
                                     {status === 'done' && downloadUrl && (
                                         <a href={downloadUrl} download={`numbered-${fileName}`}
                                             className="w-full py-3 rounded-xl font-semibold text-sm text-center bg-emerald-600 hover:bg-emerald-500 transition-all flex items-center justify-center gap-2">

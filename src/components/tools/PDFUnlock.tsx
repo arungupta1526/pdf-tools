@@ -2,7 +2,9 @@
 
 import React, { useState, useRef } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -13,6 +15,7 @@ export default function PDFUnlock() {
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [password, setPassword] = useState('');
     const [showPw, setShowPw] = useState(false);
+    const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
 
     const handleFile = (file: File) => {
@@ -23,17 +26,21 @@ export default function PDFUnlock() {
     const handleUnlock = async () => {
         if (!fileRef.current) return;
         setStatus('processing'); setErrorMsg('');
+        isCancelledRef.current = false;
         try {
             const { PDFDocument } = await import('pdf-lib');
             const bytes = await fileRef.current.arrayBuffer();
+            if (isCancelledRef.current) { setStatus('idle'); return; }
             // Try loading with password
             const doc = await PDFDocument.load(bytes, {
                 // @ts-expect-error – password option is valid
                 password,
                 ignoreEncryption: false,
             });
+            if (isCancelledRef.current) { setStatus('idle'); return; }
             // Save without encryption
             const outBytes = await doc.save({ useObjectStreams: false });
+            if (isCancelledRef.current) { setStatus('idle'); return; }
             setDownloadUrl(URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' })));
             setStatus('done');
         } catch (e: unknown) {
@@ -52,6 +59,11 @@ export default function PDFUnlock() {
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="🔓" title="Unlock PDF" />
             <div className="flex-1 p-6 max-w-xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="🔓" 
+                    title="PDF Unlock" 
+                    description="Remove password protection from your PDF files permanently." 
+                />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-4">
                     <DropZone onFile={handleFile} fileName={fileName} />
                     {fileName && (
@@ -70,10 +82,14 @@ export default function PDFUnlock() {
                             <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl px-4 py-3 text-blue-300 text-xs">
                                 ℹ️ You must know the PDF password to unlock it. Works with RC4 / AES-128 encrypted PDFs.
                             </div>
-                            <button onClick={handleUnlock} disabled={status === 'processing' || !password}
-                                className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                                {status === 'processing' ? <><span className="animate-spin">⏳</span>Unlocking…</> : '🔓 Unlock PDF'}
-                            </button>
+                            <ProcessingButton
+                                onClick={handleUnlock}
+                                onCancel={() => { isCancelledRef.current = true; }}
+                                disabled={!password}
+                                isProcessing={status === 'processing'}
+                                idleLabel="🔓 Unlock PDF"
+                                processingLabel="Unlocking…"
+                            />
                             {status === 'done' && downloadUrl && (
                                 <a href={downloadUrl} download={`unlocked-${fileName}`}
                                     className="w-full py-3 rounded-xl font-semibold text-sm text-center bg-emerald-600 hover:bg-emerald-500 transition-all flex items-center justify-center gap-2">

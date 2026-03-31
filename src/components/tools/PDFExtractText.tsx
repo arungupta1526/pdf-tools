@@ -2,7 +2,9 @@
 
 import React, { useState, useRef } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -13,6 +15,7 @@ export default function PDFExtractText() {
     const [progress, setProgress] = useState('');
     const [text, setText] = useState('');
     const [copied, setCopied] = useState(false);
+    const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
 
     const handleFile = (file: File) => {
@@ -23,12 +26,14 @@ export default function PDFExtractText() {
     const handleExtract = async () => {
         if (!fileRef.current) return;
         setStatus('processing'); setErrorMsg(''); setText('');
+        isCancelledRef.current = false;
         try {
             const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
             pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
             const doc = await pdfjs.getDocument({ data: new Uint8Array(await fileRef.current.arrayBuffer()) }).promise;
             const pages: string[] = [];
             for (let i = 1; i <= doc.numPages; i++) {
+                if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
                 setProgress(`Extracting page ${i}/${doc.numPages}…`);
                 const page = await doc.getPage(i);
                 const content = await page.getTextContent();
@@ -58,13 +63,21 @@ export default function PDFExtractText() {
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="📝" title="Extract Text" />
             <div className="flex-1 p-6 max-w-3xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="📝" 
+                    title="Extract Text" 
+                    description="Extract all text content from your PDF and save it as a text file." 
+                />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-4">
                     <DropZone onFile={handleFile} fileName={fileName} />
                     {fileName && (
-                        <button onClick={handleExtract} disabled={status === 'processing'}
-                            className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                            {status === 'processing' ? <><span className="animate-spin">⏳</span>{progress}</> : '📝 Extract Text'}
-                        </button>
+                        <ProcessingButton
+                            onClick={handleExtract}
+                            onCancel={() => { isCancelledRef.current = true; }}
+                            isProcessing={status === 'processing'}
+                            idleLabel="📝 Extract Text"
+                            processingLabel={progress || 'Extracting…'}
+                        />
                     )}
                     {errorMsg && <p className="text-red-400 text-sm">⚠️ {errorMsg}</p>}
                 </div>

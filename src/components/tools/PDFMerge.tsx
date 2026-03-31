@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useState, useRef, useCallback } from 'react';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -13,6 +15,7 @@ export default function PDFMerge() {
     const [progress, setProgress] = useState('');
     const [errorMsg, setErrorMsg] = useState('');
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+    const isCancelledRef = useRef(false);
     const inputRef = useRef<HTMLInputElement>(null);
     const dragItem = useRef<number | null>(null);
     const dragOverItem = useRef<number | null>(null);
@@ -41,10 +44,12 @@ export default function PDFMerge() {
     const handleMerge = useCallback(async () => {
         if (items.length < 2) { setErrorMsg('Add at least 2 PDFs.'); return; }
         setStatus('processing'); setErrorMsg(''); setProgress('Loading…');
+        isCancelledRef.current = false;
         try {
             const { PDFDocument } = await import('pdf-lib');
             const outDoc = await PDFDocument.create();
             for (let i = 0; i < items.length; i++) {
+                if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
                 setProgress(`Merging ${i + 1}/${items.length}: ${items[i].name}`);
                 const bytes = await items[i].file.arrayBuffer();
                 const doc = await PDFDocument.load(bytes);
@@ -52,6 +57,7 @@ export default function PDFMerge() {
                 pages.forEach(p => outDoc.addPage(p));
             }
             setProgress('Saving…');
+            if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             const outBytes = await outDoc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
             setDownloadUrl(URL.createObjectURL(blob));
@@ -63,6 +69,11 @@ export default function PDFMerge() {
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="🔗" title="PDF Merge" />
             <div className="flex-1 p-6 max-w-3xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="🔗" 
+                    title="PDF Merge" 
+                    description="Combine multiple PDF files into one document in the order you want." 
+                />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-4">
 
                     {/* Multi-file drop zone */}
@@ -102,10 +113,14 @@ export default function PDFMerge() {
                         </div>
                     )}
 
-                    <button onClick={handleMerge} disabled={items.length < 2 || status === 'processing'}
-                        className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                        {status === 'processing' ? <><span className="animate-spin">⏳</span>{progress}</> : `🔗 Merge ${items.length} PDFs`}
-                    </button>
+                    <ProcessingButton
+                        onClick={handleMerge}
+                        onCancel={() => { isCancelledRef.current = true; }}
+                        disabled={items.length < 2}
+                        isProcessing={status === 'processing'}
+                        idleLabel={`🔗 Merge ${items.length} PDFs`}
+                        processingLabel={progress || 'Processing…'}
+                    />
 
                     {status === 'done' && downloadUrl && (
                         <a href={downloadUrl} download="merged.pdf"

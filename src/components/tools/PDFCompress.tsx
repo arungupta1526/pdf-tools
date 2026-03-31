@@ -2,7 +2,9 @@
 
 import React, { useState, useRef, useCallback } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 type CompressMode = 'quality' | 'target';
@@ -28,6 +30,7 @@ export default function PDFCompress() {
     const [compressMode, setCompressMode] = useState<CompressMode>('quality');
     const [targetValue, setTargetValue] = useState('500');
     const [targetUnit, setTargetUnit] = useState<'KB' | 'MB'>('KB');
+    const isCancelledRef = useRef(false);
 
     const fileRef = useRef<File | null>(null);
 
@@ -51,6 +54,7 @@ export default function PDFCompress() {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d')!;
         for (let i = 1; i <= pdfjsDoc.numPages; i++) {
+            if (isCancelledRef.current) throw new Error('CANCELLED');
             onProgress?.(`Page ${i}/${pdfjsDoc.numPages} (quality ${Math.round(q * 100)}%)…`);
             const page = await pdfjsDoc.getPage(i);
             const viewport = page.getViewport({ scale: 1.5 });
@@ -67,6 +71,7 @@ export default function PDFCompress() {
     const handleCompress = async () => {
         if (!fileRef.current) return;
         setStatus('processing'); setErrorMsg(''); setDownloadUrl(null); setFinalQuality(null);
+        isCancelledRef.current = false;
 
         try {
             const [pdfjs, { PDFDocument }] = await Promise.all([
@@ -122,7 +127,12 @@ export default function PDFCompress() {
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
             setDownloadUrl(URL.createObjectURL(blob));
             setProgress(''); setStatus('done');
-        } catch (e) { console.error(e); setErrorMsg('Compression failed.'); setStatus('error'); }
+        } catch (e) { 
+            if (e instanceof Error && e.message === 'CANCELLED') {
+                setStatus('idle'); setProgress(''); return;
+            }
+            console.error(e); setErrorMsg('Compression failed.'); setStatus('error'); 
+        }
     };
 
     const savings = originalSize > 0 && compressedSize > 0
@@ -133,6 +143,11 @@ export default function PDFCompress() {
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="🗜️" title="PDF Compress" />
             <div className="flex-1 p-6 max-w-xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="📉" 
+                    title="PDF Compress" 
+                    description="Reduce the file size of your PDF while maintaining optimal quality." 
+                />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-4">
                     <DropZone onFile={handleFile} fileName={fileName} />
 
@@ -194,10 +209,13 @@ export default function PDFCompress() {
                                 </div>
                             )}
 
-                            <button onClick={handleCompress} disabled={status === 'processing'}
-                                className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                                {status === 'processing' ? <><span className="animate-spin">⏳</span>{progress || 'Processing…'}</> : '🗜️ Compress PDF'}
-                            </button>
+                            <ProcessingButton
+                                onClick={handleCompress}
+                                onCancel={() => { isCancelledRef.current = true; }}
+                                isProcessing={status === 'processing'}
+                                idleLabel="🗜️ Compress PDF"
+                                processingLabel={progress || 'Processing…'}
+                            />
 
                             {status === 'done' && downloadUrl && (
                                 <div className="flex flex-col gap-3">

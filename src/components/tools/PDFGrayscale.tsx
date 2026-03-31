@@ -2,7 +2,9 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -16,6 +18,7 @@ export default function PDFGrayscale() {
     const [previewLoading, setPreviewLoading] = useState(false);
     const [originalSize, setOriginalSize] = useState(0);
     const [outputSize, setOutputSize] = useState(0);
+    const isCancelledRef = useRef(false);
 
     const fileRef = useRef<File | null>(null);
     const page1Ref = useRef<ImageData | null>(null);
@@ -66,6 +69,7 @@ export default function PDFGrayscale() {
     const handleProcess = async () => {
         if (!fileRef.current) return;
         setStatus('processing'); setErrorMsg('');
+        isCancelledRef.current = false;
         try {
             const [pdfjs, { PDFDocument }] = await Promise.all([import('pdfjs-dist/legacy/build/pdf.mjs'), import('pdf-lib')]);
             pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
@@ -76,6 +80,7 @@ export default function PDFGrayscale() {
             const ctx = canvas.getContext('2d')!;
 
             for (let i = 1; i <= pdfjsDoc.numPages; i++) {
+                if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
                 setProgress(`Page ${i}/${pdfjsDoc.numPages}…`);
                 const page = await pdfjsDoc.getPage(i);
                 const viewport = page.getViewport({ scale: 2 });
@@ -94,6 +99,7 @@ export default function PDFGrayscale() {
                 p.drawImage(img, { x: 0, y: 0, width: viewport.width / 2, height: viewport.height / 2 });
             }
 
+            if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             const outBytes = await outDoc.save();
             setOutputSize(outBytes.byteLength);
             setDownloadUrl(URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' })));
@@ -106,17 +112,25 @@ export default function PDFGrayscale() {
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="🌑" title="Grayscale PDF" />
-            <div className="flex-1 p-6 max-w-4xl mx-auto w-full">
+            <div className="flex-1 p-6 max-w-4xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="🌑" 
+                    title="PDF Grayscale" 
+                    description="Convert your PDF to black and white to save ink and reduce file size." 
+                />
                 <div className="flex flex-col lg:flex-row gap-5">
                     <div className="flex-1 flex flex-col gap-4">
                         <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-4">
                             <DropZone onFile={handleFile} fileName={fileName} />
                             {fileName && (
                                 <>
-                                    <button onClick={handleProcess} disabled={status === 'processing'}
-                                        className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                                        {status === 'processing' ? <><span className="animate-spin">⏳</span>{progress}</> : '🌑 Convert to Grayscale'}
-                                    </button>
+                                    <ProcessingButton
+                                        onClick={handleProcess}
+                                        onCancel={() => { isCancelledRef.current = true; }}
+                                        isProcessing={status === 'processing'}
+                                        idleLabel="🌑 Convert to Grayscale"
+                                        processingLabel={progress || 'Processing…'}
+                                    />
                                     {status === 'done' && downloadUrl && (
                                         <div className="flex flex-col gap-3">
                                             <div className="bg-gray-800 rounded-xl p-4 flex justify-between text-sm">

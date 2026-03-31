@@ -2,7 +2,9 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -24,6 +26,7 @@ export default function PDFWatermark() {
     const [errorMsg, setErrorMsg] = useState('');
     const [progress, setProgress] = useState('');
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+    const isCancelledRef = useRef(false);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [previewLoading, setPreviewLoading] = useState(false);
 
@@ -107,6 +110,7 @@ export default function PDFWatermark() {
     const handleProcess = async () => {
         if (!fileRef.current || !text.trim()) { setErrorMsg('Enter watermark text.'); return; }
         setStatus('processing'); setErrorMsg('');
+        isCancelledRef.current = false;
         try {
             const { PDFDocument, StandardFonts, rgb, degrees } = await import('pdf-lib');
             const bytes = await fileRef.current.arrayBuffer();
@@ -116,6 +120,7 @@ export default function PDFWatermark() {
             const [cr, cg, cb] = COLOR_MAP[color];
 
             for (let i = 0; i < pages.length; i++) {
+                if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
                 setProgress(`Page ${i + 1}/${pages.length}…`);
                 const page = pages[i];
                 const { width, height } = page.getSize();
@@ -130,6 +135,7 @@ export default function PDFWatermark() {
                 page.drawText(text, { x, y, size: fontSize, font, color: rgb(cr, cg, cb), opacity, rotate });
             }
 
+            if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             const outBytes = await doc.save();
             setDownloadUrl(URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' })));
             setProgress(''); setStatus('done');
@@ -139,7 +145,12 @@ export default function PDFWatermark() {
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="💧" title="PDF Watermark" />
-            <div className="flex-1 p-6 max-w-4xl mx-auto w-full">
+            <div className="flex-1 p-6 max-w-4xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="🛡️" 
+                    title="PDF Watermark" 
+                    description="Add text or image watermarks to protect your PDF documents." 
+                />
                 <div className="flex flex-col lg:flex-row gap-5">
 
                     {/* ── Left: Controls ── */}
@@ -197,10 +208,14 @@ export default function PDFWatermark() {
                                         </div>
                                     </div>
 
-                                    <button onClick={handleProcess} disabled={status === 'processing' || !text.trim()}
-                                        className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                                        {status === 'processing' ? <><span className="animate-spin">⏳</span>{progress}</> : '💧 Add Watermark'}
-                                    </button>
+                                    <ProcessingButton
+                                        onClick={handleProcess}
+                                        onCancel={() => { isCancelledRef.current = true; }}
+                                        disabled={!text.trim()}
+                                        isProcessing={status === 'processing'}
+                                        idleLabel="💧 Add Watermark"
+                                        processingLabel={progress || 'Processing…'}
+                                    />
                                     {status === 'done' && downloadUrl && (
                                         <a href={downloadUrl} download={`watermarked-${fileName}`}
                                             className="w-full py-3 rounded-xl font-semibold text-sm text-center bg-emerald-600 hover:bg-emerald-500 transition-all flex items-center justify-center gap-2">

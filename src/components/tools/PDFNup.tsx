@@ -2,7 +2,9 @@
 
 import React, { useState, useRef } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -31,6 +33,7 @@ export default function PDFNup() {
     const [errorMsg, setErrorMsg] = useState('');
     const [progress, setProgress] = useState('');
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+    const isCancelledRef = useRef(false);
 
     // Settings
     const [layoutMode, setLayoutMode] = useState<'preset' | 'custom'>('preset');
@@ -65,6 +68,7 @@ export default function PDFNup() {
     const handleProcess = async () => {
         if (!fileRef.current) return;
         setStatus('processing'); setErrorMsg(''); setProgress('Preparing…');
+        isCancelledRef.current = false;
 
         try {
             const { PDFDocument, rgb } = await import('pdf-lib');
@@ -118,10 +122,12 @@ export default function PDFNup() {
             const totalSheets = Math.ceil(totalPages / pagesPerSheet);
 
             for (let sheet = 0; sheet < totalSheets; sheet++) {
+                if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
                 setProgress(`Sheet ${sheet + 1}/${totalSheets}…`);
                 const outPage = outDoc.addPage([outW, outH]);
 
                 for (let slot = 0; slot < pagesPerSheet; slot++) {
+                    if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
                     const pageIdx = sheet * pagesPerSheet + slot;
                     if (pageIdx >= totalPages) break;
 
@@ -193,6 +199,7 @@ export default function PDFNup() {
                 }
             }
 
+            if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             const outBytes = await outDoc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
             setDownloadUrl(URL.createObjectURL(blob));
@@ -208,7 +215,12 @@ export default function PDFNup() {
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="📐" title="Multiple Pages Per Sheet" />
-            <div className="flex-1 p-6 max-w-3xl mx-auto w-full">
+            <div className="flex-1 p-6 max-w-3xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="📐" 
+                    title="Pages Per Sheet" 
+                    description="Arrange multiple pages on a single sheet of paper (2-up, 4-up, etc.)." 
+                />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-5">
                     <DropZone onFile={handleFile} fileName={fileName} />
 
@@ -425,10 +437,13 @@ export default function PDFNup() {
                             })()}
 
                             {/* Process Button */}
-                            <button onClick={handleProcess} disabled={status === 'processing'}
-                                className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                                {status === 'processing' ? <><span className="animate-spin">⏳</span>{progress}</> : '📐 Create N-up PDF'}
-                            </button>
+                            <ProcessingButton
+                                onClick={handleProcess}
+                                onCancel={() => { isCancelledRef.current = true; }}
+                                isProcessing={status === 'processing'}
+                                idleLabel="📐 Create N-up PDF"
+                                processingLabel={progress || 'Processing…'}
+                            />
 
                             {status === 'done' && downloadUrl && (
                                 <a href={downloadUrl} download={`nup-${nup}-${fileName}`}

@@ -2,7 +2,9 @@
 
 import React, { useState, useRef, useCallback } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
 
@@ -18,6 +20,7 @@ export default function PDFRotate() {
     const [pages, setPages] = useState<PageItem[]>([]);
     const [globalRotation, setGlobalRotation] = useState(0);
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+    const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
     const pdfjsDocRef = useRef<PdfjsDoc>(null);
 
@@ -57,14 +60,17 @@ export default function PDFRotate() {
     const handleSave = async () => {
         if (!fileRef.current) return;
         setStatus('processing'); setErrorMsg('');
+        isCancelledRef.current = false;
         try {
             const { PDFDocument, degrees } = await import('pdf-lib');
             const srcBytes = await fileRef.current.arrayBuffer();
             const doc = await PDFDocument.load(srcBytes);
             const pdfPages = doc.getPages();
-            pages.forEach(({ pageNum, rotation }) => {
+            for (const { pageNum, rotation } of pages) {
+                if (isCancelledRef.current) { setStatus('ready'); return; }
                 pdfPages[pageNum - 1].setRotation(degrees(rotation));
-            });
+            }
+            if (isCancelledRef.current) { setStatus('ready'); return; }
             const outBytes = await doc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
             setDownloadUrl(URL.createObjectURL(blob));
@@ -76,6 +82,11 @@ export default function PDFRotate() {
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="🔃" title="PDF Rotate" />
             <div className="flex-1 p-6 max-w-3xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="🔄" 
+                    title="PDF Rotate" 
+                    description="Rotate your PDF pages to portrait or landscape orientation." 
+                />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-4">
                     <DropZone onFile={handleFile} fileName={fileName} />
                     {pages.length > 0 && (
@@ -93,10 +104,13 @@ export default function PDFRotate() {
                                         className="px-4 py-2 rounded-xl text-sm font-medium bg-gray-800 text-gray-400 hover:text-white transition-all">Reset</button>
                                 </div>
                             </div>
-                            <button onClick={handleSave} disabled={status === 'processing'}
-                                className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                                {status === 'processing' ? <><span className="animate-spin">⏳</span>Saving…</> : '🔃 Apply Rotation'}
-                            </button>
+                            <ProcessingButton
+                                onClick={handleSave}
+                                onCancel={() => { isCancelledRef.current = true; }}
+                                isProcessing={status === 'processing'}
+                                idleLabel="🔃 Apply Rotation"
+                                processingLabel="Saving…"
+                            />
                             {status === 'done' && downloadUrl && (
                                 <a href={downloadUrl} download={`rotated-${fileName}`}
                                     className="w-full py-3 rounded-xl font-semibold text-sm text-center bg-emerald-600 hover:bg-emerald-500 transition-all flex items-center justify-center gap-2">

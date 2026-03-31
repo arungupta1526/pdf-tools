@@ -1,6 +1,9 @@
 'use client';
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import ProcessingButton from '@/components/ProcessingButton';
+import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -88,6 +91,7 @@ export default function PDFInverter() {
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [downloadName, setDownloadName] = useState('');
     const [progress, setProgress] = useState('');
+    const isCancelledRef = useRef(false);
 
     const fileRef = useRef<File | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -220,6 +224,7 @@ export default function PDFInverter() {
         setDownloadUrl(null);
         setErrorMsg('');
         setProgress('Loading…');
+        isCancelledRef.current = false;
         try {
             const targetRgb = hexColor.length > 0 ? hexToRgb(hexColor) : null;
             if (hexColor.length > 0 && !targetRgb) { setErrorMsg('Invalid hex color.'); setStatus('error'); return; }
@@ -237,6 +242,7 @@ export default function PDFInverter() {
             const ctx = canvas.getContext('2d')!;
 
             for (let i = 1; i <= pdfjsDoc.numPages; i++) {
+                if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
                 setProgress(`Page ${i} / ${pdfjsDoc.numPages}…`);
                 const page = await pdfjsDoc.getPage(i);
                 const viewport = page.getViewport({ scale: 2 });
@@ -255,6 +261,7 @@ export default function PDFInverter() {
                 pdfPage.drawImage(img, { x: 0, y: 0, width: viewport.width / 2, height: viewport.height / 2 });
             }
 
+            if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             const outBytes = await outDoc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
             setDownloadUrl(URL.createObjectURL(blob));
@@ -273,18 +280,14 @@ export default function PDFInverter() {
     const previewColor = isHexValid && hexColor.startsWith('#') && hexColor.length === 7 ? hexColor : null;
 
     return (
-        <main className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col items-center py-10 px-4">
-
-            {/* Header */}
-            <div className="mb-8 text-center">
-                <div className="inline-flex items-center gap-3 mb-2">
-                    <div className="w-10 h-10 bg-indigo-500 rounded-xl flex items-center justify-center text-xl shadow-lg shadow-indigo-500/30">🔄</div>
-                    <h1 className="text-3xl font-extrabold tracking-tight">PDF Invert</h1>
-                </div>
-                <p className="text-gray-400 text-sm max-w-xs mx-auto">Invert your PDF&apos;s colors — standard or with a custom tint.</p>
-            </div>
-
-            <div className="w-full max-w-2xl flex flex-col gap-5">
+        <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
+            <ToolHeader icon="🔄" title="PDF Invert" />
+            <div className="flex-1 p-6 max-w-2xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="🔄" 
+                    title="PDF Invert" 
+                    description="Invert your PDF's colors — standard or with a custom tint." 
+                />
 
                 {/* ── Control Card ── */}
                 <div className="bg-gray-900 rounded-2xl shadow-2xl border border-gray-700/50 overflow-hidden">
@@ -372,12 +375,16 @@ export default function PDFInverter() {
                         </div>
 
                         {/* ── Invert Button ── */}
-                        <button id="invert-btn"
+                        <ProcessingButton
+                            id="invert-btn"
                             onClick={() => fileRef.current && processFile(fileRef.current)}
-                            disabled={!fileName || !isHexValid || status === 'processing'}
-                            className="w-full py-3 rounded-xl font-semibold text-sm transition-all bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2">
-                            {status === 'processing' ? <><span className="animate-spin">⏳</span>{progress || 'Processing…'}</> : <>🔄 Invert PDF</>}
-                        </button>
+                            onCancel={() => { isCancelledRef.current = true; }}
+                            disabled={!fileName || !isHexValid}
+                            isProcessing={status === 'processing'}
+                            idleLabel={<>🔄 Invert PDF</>}
+                            processingLabel={progress || 'Processing…'}
+                            className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/20"
+                        />
 
                         {status === 'done' && downloadUrl && (
                             <a id="download-btn" href={downloadUrl} download={downloadName}
@@ -451,9 +458,8 @@ export default function PDFInverter() {
                         </div>
                     </div>
                 )}
+                <p className="mt-10 text-center text-gray-600 text-xs">🔒 100% local — your PDF never leaves your device.</p>
             </div>
-
-            <p className="mt-10 text-gray-600 text-xs">🔒 100% local — your PDF never leaves your device.</p>
-        </main>
+        </div>
     );
 }

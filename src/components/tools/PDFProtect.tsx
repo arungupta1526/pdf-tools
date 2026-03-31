@@ -2,7 +2,9 @@
 
 import React, { useState, useRef } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -16,6 +18,7 @@ export default function PDFProtect() {
     const [showPw, setShowPw] = useState(false);
     const [allowPrint, setAllowPrint] = useState(true);
     const [allowCopy, setAllowCopy] = useState(false);
+    const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
 
     const handleFile = (file: File) => {
@@ -26,10 +29,13 @@ export default function PDFProtect() {
     const handleProtect = async () => {
         if (!fileRef.current || !password) { setErrorMsg('Enter a password.'); return; }
         setStatus('processing'); setErrorMsg(''); setProgress('Encrypting…');
+        isCancelledRef.current = false;
         try {
             const { PDFDocument } = await import('pdf-lib');
             const bytes = await fileRef.current.arrayBuffer();
+            if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             const doc = await PDFDocument.load(bytes);
+            if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
 
             // pdf-lib encryption (RC4-128)
             const outBytes = await doc.save({
@@ -49,6 +55,7 @@ export default function PDFProtect() {
                 },
             });
 
+            if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             setProgress('');
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
             setDownloadUrl(URL.createObjectURL(blob));
@@ -60,6 +67,11 @@ export default function PDFProtect() {
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="🔒" title="PDF Protect" />
             <div className="flex-1 p-6 max-w-xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="🔒" 
+                    title="PDF Protect" 
+                    description="Secure your PDF with a password and set custom permissions." 
+                />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-4">
                     <DropZone onFile={handleFile} fileName={fileName} />
                     {fileName && (
@@ -94,10 +106,14 @@ export default function PDFProtect() {
                                 ⚠️ Uses RC4-128 bit encryption. Suitable for basic protection — not military grade.
                             </div>
 
-                            <button onClick={handleProtect} disabled={status === 'processing' || !password}
-                                className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                                {status === 'processing' ? <><span className="animate-spin">⏳</span>{progress || 'Encrypting…'}</> : '🔒 Protect PDF'}
-                            </button>
+                            <ProcessingButton
+                                onClick={handleProtect}
+                                onCancel={() => { isCancelledRef.current = true; }}
+                                disabled={!password}
+                                isProcessing={status === 'processing'}
+                                idleLabel="🔒 Protect PDF"
+                                processingLabel={progress || 'Encrypting…'}
+                            />
                             {status === 'done' && downloadUrl && (
                                 <a href={downloadUrl} download={`protected-${fileName}`}
                                     className="w-full py-3 rounded-xl font-semibold text-sm text-center bg-emerald-600 hover:bg-emerald-500 transition-all flex items-center justify-center gap-2">

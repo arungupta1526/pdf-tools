@@ -2,7 +2,9 @@
 
 import React, { useState, useRef } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
 
@@ -14,6 +16,7 @@ export default function PDFMetadata() {
     const [errorMsg, setErrorMsg] = useState('');
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [meta, setMeta] = useState<Metadata>({ title: '', author: '', subject: '', keywords: '', creator: '', producer: '' });
+    const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
 
     const handleFile = async (file: File) => {
@@ -38,16 +41,20 @@ export default function PDFMetadata() {
     const handleSave = async () => {
         if (!fileRef.current) return;
         setStatus('processing'); setErrorMsg('');
+        isCancelledRef.current = false;
         try {
             const { PDFDocument } = await import('pdf-lib');
             const bytes = await fileRef.current.arrayBuffer();
+            if (isCancelledRef.current) { setStatus('ready'); return; }
             const doc = await PDFDocument.load(bytes);
+            if (isCancelledRef.current) { setStatus('ready'); return; }
             doc.setTitle(meta.title);
             doc.setAuthor(meta.author);
             doc.setSubject(meta.subject);
             doc.setKeywords([meta.keywords]);
             doc.setCreator(meta.creator);
             doc.setProducer(meta.producer);
+            if (isCancelledRef.current) { setStatus('ready'); return; }
             const outBytes = await doc.save();
             setDownloadUrl(URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' })));
             setStatus('done');
@@ -67,6 +74,11 @@ export default function PDFMetadata() {
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="✏️" title="Edit Metadata" />
             <div className="flex-1 p-6 max-w-xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="✏️" 
+                    title="Edit Metadata" 
+                    description="Edit PDF properties like title, author, subject, and keywords." 
+                />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-4">
                     <DropZone onFile={handleFile} fileName={fileName} />
                     {status === 'loading' && (
@@ -84,10 +96,13 @@ export default function PDFMetadata() {
                                     </div>
                                 ))}
                             </div>
-                            <button onClick={handleSave} disabled={status === 'processing'}
-                                className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                                {status === 'processing' ? <><span className="animate-spin">⏳</span>Saving…</> : '✏️ Save Metadata'}
-                            </button>
+                            <ProcessingButton
+                                onClick={handleSave}
+                                onCancel={() => { isCancelledRef.current = true; }}
+                                isProcessing={status === 'processing'}
+                                idleLabel="✏️ Save Metadata"
+                                processingLabel="Saving…"
+                            />
                             {status === 'done' && downloadUrl && (
                                 <a href={downloadUrl} download={`meta-${fileName}`}
                                     className="w-full py-3 rounded-xl font-semibold text-sm text-center bg-emerald-600 hover:bg-emerald-500 transition-all flex items-center justify-center gap-2">

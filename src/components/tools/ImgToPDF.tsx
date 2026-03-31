@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 type PageSize = 'original' | 'a4' | 'letter';
@@ -21,6 +23,7 @@ export default function ImgToPDF() {
     const [errorMsg, setErrorMsg] = useState('');
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [pageSize, setPageSize] = useState<PageSize>('a4');
+    const isCancelledRef = useRef(false);
     const inputRef = useRef<HTMLInputElement>(null);
     const dragItem = useRef<number | null>(null);
     const dragOverItem = useRef<number | null>(null);
@@ -52,12 +55,14 @@ export default function ImgToPDF() {
     const handleConvert = async () => {
         if (!items.length) return;
         setStatus('processing'); setErrorMsg('');
+        isCancelledRef.current = false;
         try {
             const { PDFDocument } = await import('pdf-lib');
             const doc = await PDFDocument.create();
             const sizeOpt = PAGE_SIZES.find(s => s.value === pageSize)!;
 
             for (let i = 0; i < items.length; i++) {
+                if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
                 setProgress(`Embedding image ${i + 1}/${items.length}…`);
                 const item = items[i];
                 const bytes = await item.file.arrayBuffer();
@@ -92,6 +97,7 @@ export default function ImgToPDF() {
                 page.drawImage(img, { x: (pw - w) / 2, y: (ph - h) / 2, width: w, height: h });
             }
 
+            if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             setProgress('Saving…');
             const bytes = await doc.save();
             setDownloadUrl(URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type: 'application/pdf' })));
@@ -103,6 +109,11 @@ export default function ImgToPDF() {
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="🖼️" title="Images → PDF" />
             <div className="flex-1 p-6 max-w-3xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="🖼️" 
+                    title="Images to PDF" 
+                    description="Convert JPG, PNG, and WebP images to a single PDF document." 
+                />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-4">
 
                     {/* Drop zone */}
@@ -159,10 +170,13 @@ export default function ImgToPDF() {
                     )}
 
                     {items.length > 0 && (
-                        <button onClick={handleConvert} disabled={status === 'processing'}
-                            className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all">
-                            {status === 'processing' ? <><span className="animate-spin">⏳</span>{progress}</> : `🖼️ Convert ${items.length} Image${items.length !== 1 ? 's' : ''} to PDF`}
-                        </button>
+                        <ProcessingButton
+                            onClick={handleConvert}
+                            onCancel={() => { isCancelledRef.current = true; }}
+                            isProcessing={status === 'processing'}
+                            idleLabel={`🖼️ Convert ${items.length} Image${items.length !== 1 ? 's' : ''} to PDF`}
+                            processingLabel={progress || 'Processing…'}
+                        />
                     )}
 
                     {status === 'done' && downloadUrl && (

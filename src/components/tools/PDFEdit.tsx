@@ -2,7 +2,9 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 import { Trash2, UserPlus, Move, Layers, CheckCircle2 } from 'lucide-react';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
@@ -25,6 +27,7 @@ export default function PDFEdit() {
     const [fileName, setFileName] = useState('');
     const [errorMsg, setErrorMsg] = useState('');
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+    const isCancelledRef = useRef(false);
     const [pageCount, setPageCount] = useState(0);
     const [targetPage, setTargetPage] = useState(1);
     const [pageThumb, setPageThumb] = useState<string | null>(null);
@@ -211,6 +214,7 @@ export default function PDFEdit() {
     const handleProcess = async () => {
         if (!fileRef.current || annotations.length === 0) return;
         setStatus('processing'); setErrorMsg('');
+        isCancelledRef.current = false;
 
         try {
             const { PDFDocument } = await import('pdf-lib');
@@ -218,6 +222,7 @@ export default function PDFEdit() {
             const doc = await PDFDocument.load(fileBytes);
 
             for (const ann of annotations) {
+                if (isCancelledRef.current) { setStatus('ready'); return; }
                 const page = doc.getPage(ann.page - 1);
                 const { height: pageH } = page.getSize();
                 const base64 = ann.data.split(',')[1];
@@ -239,6 +244,7 @@ export default function PDFEdit() {
                 });
             }
 
+            if (isCancelledRef.current) { setStatus('ready'); return; }
             const outBytes = await doc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
             setDownloadUrl(URL.createObjectURL(blob));
@@ -292,7 +298,12 @@ export default function PDFEdit() {
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="🎨" title="Edit PDF (Multi-Layer)" />
-            <div className="flex-1 p-6 max-w-6xl mx-auto w-full">
+            <div className="flex-1 p-6 max-w-6xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="📝" 
+                    title="PDF Edit" 
+                    description="Edit your PDF by adding text, images, or shapes directly on pages." 
+                />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-5">
                     <DropZone onFile={handleFile} fileName={fileName} />
 
@@ -388,10 +399,15 @@ export default function PDFEdit() {
                                     </div>
                                 )}
 
-                                <button onClick={handleProcess} disabled={status === 'processing' || annotations.length === 0}
-                                    className="w-full py-3 mt-auto rounded-xl font-bold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:grayscale flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-900/20 border border-emerald-500/50">
-                                    {status === 'processing' ? <><span className="animate-spin">⏳</span> Processing…</> : <><CheckCircle2 className="h-4 w-4" /> Save & Download PDF</>}
-                                </button>
+                                <ProcessingButton
+                                    onClick={handleProcess}
+                                    onCancel={() => { isCancelledRef.current = true; }}
+                                    disabled={annotations.length === 0}
+                                    isProcessing={status === 'processing'}
+                                    idleLabel={<><CheckCircle2 className="h-4 w-4" /> Save & Download PDF</>}
+                                    processingLabel="Processing…"
+                                    className="mt-auto font-bold bg-emerald-600 hover:bg-emerald-500 disabled:grayscale shadow-lg shadow-emerald-900/20 border border-emerald-500/50"
+                                />
 
                                 {status === 'done' && downloadUrl && (
                                     <a href={downloadUrl} download={`edited-${fileName}`}

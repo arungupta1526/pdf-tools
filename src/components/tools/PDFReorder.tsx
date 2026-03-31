@@ -2,7 +2,9 @@
 
 import React, { useState, useRef, useCallback } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
 
@@ -19,6 +21,7 @@ export default function PDFReorder() {
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [dragIdx, setDragIdx] = useState<number | null>(null);
     const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+    const isCancelledRef = useRef(false);
 
     const fileRef = useRef<File | null>(null);
 
@@ -97,6 +100,7 @@ export default function PDFReorder() {
     const handleProcess = async () => {
         if (!fileRef.current || pages.length === 0) return;
         setStatus('processing');
+        isCancelledRef.current = false;
 
         try {
             const { PDFDocument } = await import('pdf-lib');
@@ -106,8 +110,10 @@ export default function PDFReorder() {
 
             const order = pages.map(p => p.pageNum - 1); // 0-indexed
             const copiedPages = await outDoc.copyPages(srcDoc, order);
+            if (isCancelledRef.current) { setStatus('ready'); return; }
             copiedPages.forEach(p => outDoc.addPage(p));
 
+            if (isCancelledRef.current) { setStatus('ready'); return; }
             const outBytes = await outDoc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
             setDownloadUrl(URL.createObjectURL(blob));
@@ -122,7 +128,12 @@ export default function PDFReorder() {
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="🔀" title="Reorder Pages" />
-            <div className="flex-1 p-6 max-w-5xl mx-auto w-full">
+            <div className="flex-1 p-6 max-w-5xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="📑" 
+                    title="PDF Reorder" 
+                    description="Rearrange the pages of your PDF document exactly how you need." 
+                />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-5">
                     <DropZone onFile={handleFile} fileName={fileName} />
 
@@ -179,13 +190,13 @@ export default function PDFReorder() {
                                 ))}
                             </div>
 
-                            <button
+                            <ProcessingButton
                                 onClick={handleProcess}
-                                disabled={status === 'processing'}
-                                className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all"
-                            >
-                                {status === 'processing' ? <><span className="animate-spin">⏳</span> Saving…</> : '🔀 Apply New Order & Download'}
-                            </button>
+                                onCancel={() => { isCancelledRef.current = true; }}
+                                isProcessing={status === 'processing'}
+                                idleLabel="🔀 Apply New Order & Download"
+                                processingLabel="Saving…"
+                            />
 
                             {status === 'done' && downloadUrl && (
                                 <a

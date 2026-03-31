@@ -2,7 +2,9 @@
 
 import React, { useState, useRef, useCallback } from 'react';
 import DropZone from '@/components/DropZone';
+import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
+import ToolHero from '@/components/ToolHero';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
 type OutputFormat = 'pdf-merged' | 'pdf-zip' | 'jpg-zip' | 'png-zip';
@@ -32,6 +34,7 @@ export default function PDFSplit() {
     const [outputFormat, setOutputFormat] = useState<OutputFormat>('pdf-merged');
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [downloadName, setDownloadName] = useState('');
+    const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
     const pdfjsDocRef = useRef<PdfjsDoc>(null);
 
@@ -102,6 +105,7 @@ export default function PDFSplit() {
         if (selectedPages.length === 0) { setErrorMsg('Select at least one page.'); return; }
 
         setStatus('processing'); setErrorMsg(''); setDownloadUrl(null);
+        isCancelledRef.current = false;
         const baseName = fileName.replace(/\.pdf$/i, '');
 
         try {
@@ -112,10 +116,12 @@ export default function PDFSplit() {
                 const srcDoc = await PDFDocument.load(srcBytes);
                 const newDoc = await PDFDocument.create();
                 for (let idx = 0; idx < selectedPages.length; idx++) {
+                    if (isCancelledRef.current) { setStatus('ready'); setProgress(''); return; }
                     setProgress(`Copying page ${idx + 1}/${selectedPages.length}…`);
                     const [copied] = await newDoc.copyPages(srcDoc, [selectedPages[idx] - 1]);
                     newDoc.addPage(copied);
                 }
+                if (isCancelledRef.current) { setStatus('ready'); setProgress(''); return; }
                 setProgress('Saving…');
                 const bytes = await newDoc.save();
                 const blob = new Blob([bytes as unknown as BlobPart], { type: 'application/pdf' });
@@ -134,6 +140,7 @@ export default function PDFSplit() {
                 ? await PDFDocument.load(await fileRef.current.arrayBuffer()) : null;
 
             for (let idx = 0; idx < selectedPages.length; idx++) {
+                if (isCancelledRef.current) { setStatus('ready'); setProgress(''); return; }
                 const pageNum = selectedPages[idx];
                 setProgress(`Processing page ${pageNum} (${idx + 1}/${selectedPages.length})…`);
 
@@ -156,6 +163,7 @@ export default function PDFSplit() {
             }
 
             setProgress('Zipping…');
+            if (isCancelledRef.current) { setStatus('ready'); setProgress(''); return; }
             const zipBlob = await zip.generateAsync({ type: 'blob' });
             const ext = outputFormat === 'pdf-zip' ? 'pdf' : outputFormat === 'jpg-zip' ? 'jpg' : 'png';
             setDownloadUrl(URL.createObjectURL(zipBlob));
@@ -171,6 +179,11 @@ export default function PDFSplit() {
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="✂️" title="PDF Split" />
             <div className="flex-1 p-6 max-w-3xl mx-auto w-full flex flex-col gap-5">
+                <ToolHero 
+                    icon="✂️" 
+                    title="PDF Split" 
+                    description="Extract specific pages from your PDF or split every page into separate files." 
+                />
 
                 {/* Main card */}
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-4">
@@ -226,13 +239,15 @@ export default function PDFSplit() {
                             </div>
 
                             {/* Export button */}
-                            <button onClick={handleExport} disabled={status === 'processing' || status === 'loading'}
-                                className="w-full py-3 rounded-xl font-semibold text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 flex items-center justify-center gap-2 transition-all active:scale-95">
-                                {status === 'processing'
-                                    ? <><span className="animate-spin">⏳</span>{progress}</>
-                                    : <>{selectedFmt.icon} Export {selectedCount > 0 ? `${selectedCount} page${selectedCount !== 1 ? 's' : ''}` : ''} as {selectedFmt.label}</>
-                                }
-                            </button>
+                            <ProcessingButton
+                                onClick={handleExport}
+                                onCancel={() => { isCancelledRef.current = true; }}
+                                disabled={status === 'loading'}
+                                isProcessing={status === 'processing'}
+                                idleLabel={<>{selectedFmt.icon} Export {selectedCount > 0 ? `${selectedCount} page${selectedCount !== 1 ? 's' : ''}` : ''} as {selectedFmt.label}</>}
+                                processingLabel={progress || 'Processing…'}
+                                className="bg-indigo-600 hover:bg-indigo-500 active:scale-95"
+                            />
 
                             {status === 'done' && downloadUrl && (
                                 <a href={downloadUrl} download={downloadName}
