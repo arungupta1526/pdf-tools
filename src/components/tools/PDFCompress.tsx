@@ -79,7 +79,11 @@ export default function PDFCompress() {
             ]);
             pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
             const buf = await fileRef.current.arrayBuffer();
-            const pdfjsDoc = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
+            const pdfjsDoc = await pdfjs.getDocument({ 
+                data: new Uint8Array(buf),
+                cMapUrl: '/cmaps/',
+                cMapPacked: true,
+            }).promise;
 
             let outBytes: Uint8Array;
             let usedQuality: number;

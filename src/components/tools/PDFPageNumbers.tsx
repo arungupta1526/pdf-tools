@@ -68,7 +68,11 @@ export default function PDFPageNumbers() {
         try {
             const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
             pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
-            const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+            const doc = await pdfjs.getDocument({ 
+                data: new Uint8Array(await file.arrayBuffer()),
+                cMapUrl: '/cmaps/',
+                cMapPacked: true,
+            }).promise;
             const page = await doc.getPage(1);
             const viewport = page.getViewport({ scale: 1.5 });
             const canvas = document.createElement('canvas');

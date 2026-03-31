@@ -180,7 +180,11 @@ export default function PDFInverter() {
                 'pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url
             ).toString();
             const buf = await file.arrayBuffer();
-            const doc = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
+            const doc = await pdfjs.getDocument({
+                data: new Uint8Array(buf),
+                cMapUrl: '/cmaps/',
+                cMapPacked: true,
+            }).promise;
             pdfjsDocRef.current = doc;
             setTotalPages(doc.numPages);
             setPageNum(1);
@@ -236,7 +240,11 @@ export default function PDFInverter() {
             pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
 
             const buf = await file.arrayBuffer();
-            const pdfjsDoc = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
+            const pdfjsDoc = await pdfjs.getDocument({
+                data: new Uint8Array(buf),
+                cMapUrl: '/cmaps/',
+                cMapPacked: true,
+            }).promise;
             const outDoc = await PDFDocument.create();
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d')!;

@@ -38,7 +38,11 @@ export default function PDFReorder() {
             pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
 
             const fileBytes = new Uint8Array(await file.arrayBuffer());
-            const pdfDoc = await pdfjs.getDocument({ data: fileBytes }).promise;
+            const pdfDoc = await pdfjs.getDocument({ 
+                data: fileBytes,
+                cMapUrl: '/cmaps/',
+                cMapPacked: true,
+            }).promise;
             const totalPages = pdfDoc.numPages;
 
             const thumbs: PageItem[] = [];

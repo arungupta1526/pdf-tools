@@ -1,105 +1,129 @@
-# 📑 PDF Tools Suite
+# PDF Tools Suite
 
-A fast, modern, and **100% private** web application offering a comprehensive suite of **17 PDF manipulation tools**. Built with Next.js, Tailwind CSS, `pdf-lib`, and `pdfjs-dist`.
+A privacy-first PDF toolkit built with Next.js. The app currently includes 18 browser-based tools for splitting, merging, editing, annotating, converting, and securing PDFs without uploading files to a server.
 
-**Security Guarantee**: All processing happens entirely within your web browser. Your files are **never** uploaded to any external server.
+Live demo: [arungupta1526.github.io/pdf-tools](https://arungupta1526.github.io/pdf-tools/)
 
-🌐 **Live Demo**: [arungupta1526.github.io/pdf-tools](https://arungupta1526.github.io/pdf-tools/)
+## Highlights
 
----
+- 100% local processing in the browser
+- 18 PDF tools in one app
+- Live previews for visual tools like invert, grayscale, watermark, page numbers, and signatures
+- Progress feedback for heavier operations
+- Cancel controls during long-running processing flows
+- Static Next.js app with Docker support for self-hosting
 
-## ✨ Features (17 Tools)
+## Tool List
 
-### 📄 Pages & Structure
-1. **✂️ Split PDF**: Extract specific pages or ranges. Download as a new PDF, a ZIP of individual PDFs, or a ZIP of extracted JPGs/PNGs.
-2. **🔗 Merge PDFs**: Combine multiple PDF files into one. Drag-and-drop to reorder files before merging.
-3. **🗑️ Remove Pages**: Visual grid of all pages. Click to mark pages for deletion, then download the cleaned document.
-4. **🔃 Rotate Pages**: Rotate all pages globally (90°, 180°, 270°) or rotate individual pages using per-thumbnail controls.
-5. **📐 Pages Per Sheet** (N-up): Arrange 2, 4, 6, 8, 9, or 16 pages on a single output sheet. Supports custom rows × columns, configurable margins, borders, page size, orientation, and reading direction, with a **live layout preview**.
-6. **🔀 Reorder Pages**: Drag-and-drop page thumbnails to rearrange order. Includes ↑/↓ arrow buttons and a reset option.
+### Pages and structure
 
-### 🎨 Color & Visuals
-7. **🔄 Invert Colors**: Invert PDF colors with a custom color picker, color presets (sepia, night-mode, etc.), and a **live side-by-side preview**.
-8. **🌑 Grayscale PDF**: Convert a full-color PDF to black & white with a **live preview**.
-9. **🖼️ Images → PDF**: Convert JPG, PNG, and WebP images into a single PDF. Drag to reorder, choose page size (Original, A4, Letter).
+1. `Split PDF` - Extract selected pages or ranges and export as a merged PDF or ZIP.
+2. `Merge PDFs` - Combine multiple PDFs and reorder inputs before merging.
+3. `Remove Pages` - Select pages visually and export the remaining document.
+4. `Rotate Pages` - Rotate all pages globally or adjust individual pages.
+5. `Pages Per Sheet` - Create N-up layouts with presets or custom rows and columns.
+6. `Reorder Pages` - Drag and drop page thumbnails into a new order.
 
-### 🛠️ Edit & Optimize
-10. **🗜️ Compress PDF**: Reduce file size by quality preset (Low/Medium/High) or set an exact target size in KB or MB.
-11. **🔢 Page Numbers**: Add page numbers with custom position, font size, and prefix. **Live preview** panel.
-12. **💧 Watermark**: Overlay diagonal, centered, or anchored text watermarks. **Live preview** panel for opacity, color, size, and text.
-13. **✍️ Sign PDF**: Add your signature by drawing on a canvas or typing in Script/Serif/Mono fonts. Full **live preview** overlay on the actual PDF page, with position and size controls.
-14. **✏️ Edit Metadata**: Read and modify hidden PDF metadata — Title, Author, Subject, Keywords, Creator, Producer.
+### Color and conversion
 
-### 🔒 Security & Data
-15. **🔒 Protect PDF**: Lock your PDF with a password using RC4 encryption. Toggle permissions to disable printing and copying.
-16. **🔓 Unlock PDF**: Remove passwords and encryption (requires knowing the current password).
-17. **📝 Extract Text**: Extract all readable text from a PDF. View in-browser, copy to clipboard, or download as a `.txt` file.
+7. `Invert Colors` - Invert PDF pages with presets, custom tinting, and preview.
+8. `Grayscale PDF` - Convert a PDF to black and white with preview.
+9. `Images to PDF` - Turn JPG, PNG, and WebP images into a PDF and reorder them first.
 
-### 🔒 Privacy & SEO
+### Editing and annotation
 
-- **100% Local**: No files are uploaded. All processing is done via WebAssembly (`pdf-lib`) and JavaScript in your browser.
-- **SEO Ready**: Full metadata integration, `robots.txt`, and `sitemap.xml` for better discovery.
-- **Modern UI**: Dark-themed, responsive design with glassmorphism effects.
+10. `Compress PDF` - Reduce file size with presets or a target size.
+11. `Page Numbers` - Add page numbers with adjustable style and placement.
+12. `Watermark` - Add configurable text watermarks.
+13. `Sign PDF` - Draw or type a signature and place it on a page.
+14. `Edit PDF` - Add, move, resize, and remove signature or image layers.
+15. `Edit Metadata` - Update title, author, subject, keywords, creator, and producer fields.
 
----
+### Security and extraction
 
-## 🚀 Getting Started
+16. `Protect PDF` - Apply password protection and permission controls.
+17. `Unlock PDF` - Remove password protection when the password is known.
+18. `Extract Text` - Read text from a PDF, copy it, or download it as `.txt`.
 
-### Local Development
+## Privacy
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/arungupta1526/pdf-tools.git
-   cd pdf-tools
-   ```
+All PDF processing happens client-side in the browser using JavaScript libraries such as `pdf-lib`, `pdfjs-dist`, and `jszip`. Files are not uploaded to a backend for processing.
 
-2. **Install dependencies**:
-   ```bash
-   npm install
-   ```
+For longer tasks, the UI shows progress and supports cancellation. Cancellation is cooperative, so work stops at the next processing checkpoint rather than in the middle of a synchronous render step.
 
-3. **Run the development server**:
-   ```bash
-   npm run dev
-   ```
+## Tech Stack
 
-4. **Build for production**:
-   ```bash
-   npm run build
-   ```
+- `Next.js 16`
+- `React 19`
+- `TypeScript`
+- `Tailwind CSS 4`
+- `pdf-lib`
+- `pdfjs-dist`
+- `jszip`
+- `lucide-react`
 
-5. **Run the production server**:
-   ```bash
-   npm run start
-   ```
+## Getting Started
 
-6. Open [http://localhost:3000](http://localhost:3000) in your browser.
+### Local development
 
-### 🐳 Run with Docker (Recommended for Self-Hosting)
+1. Clone the repository:
 
-A fully containerized setup is available. See the **[Docker Setup Guide](DOCKER.md)** for full build and run instructions.
+```bash
+git clone https://github.com/arungupta1526/pdf-tools.git
+cd pdf-tools
+```
 
----
+2. Install dependencies:
 
-## 🛠️ Tech Stack
+```bash
+npm install
+```
 
-| Layer                    | Library                       |
-| ------------------------ | ----------------------------- |
-| Framework                | Next.js 16 (App Router)       |
-| Styling                  | Tailwind CSS                  |
-| PDF Manipulation         | `pdf-lib`                     |
-| PDF Rendering & Previews | `pdfjs-dist` (Mozilla PDF.js) |
-| File Archiving           | `jszip`                       |
+3. Start the development server:
 
----
+```bash
+npm run dev
+```
 
-## 📬 Contact
+4. Open `http://localhost:3000`
 
-- **GitHub**: [github.com/arungupta1526](https://github.com/arungupta1526)
-- **LinkedIn**: [linkedin.com/in/arungupta1526](https://linkedin.com/in/arungupta1526)
+### Production build
 
----
+```bash
+npm run build
+npm run start
+```
 
-## 📜 License
+### Lint
 
-MIT License
+```bash
+npm run lint
+```
+
+## Docker
+
+Docker support is included for local deployment and self-hosting.
+
+See [DOCKER.md](./DOCKER.md) for the full guide.
+
+Quick start:
+
+```bash
+docker build -t pdf-tools .
+docker run -p 3000:3000 pdf-tools
+```
+
+## Project Notes
+
+- The app is built with the Next.js App Router.
+- Each tool lives under its own route in `src/app`.
+- The landing page automatically reflects the current number of tools from the in-app tool list.
+
+## Contact
+
+- GitHub: [github.com/arungupta1526](https://github.com/arungupta1526)
+- LinkedIn: [linkedin.com/in/arungupta1526](https://linkedin.com/in/arungupta1526)
+
+## License
+
+MIT

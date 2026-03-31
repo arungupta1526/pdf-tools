@@ -93,8 +93,11 @@ export default function PDFEdit() {
             const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
             pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
             const fileBytes = new Uint8Array(await file.arrayBuffer());
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const doc = await pdfjs.getDocument({ data: fileBytes }).promise as any;
+            const doc = await pdfjs.getDocument({ 
+                data: fileBytes,
+                cMapUrl: '/cmaps/',
+                cMapPacked: true,
+            }).promise;
             pdfJsDocRef.current = doc;
             setPageCount(doc.numPages);
             setTargetPage(1);
