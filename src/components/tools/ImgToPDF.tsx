@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { canvasToBlob, isImageFile, isJpegFile, isPngFile, revokeObjectUrl } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 type PageSize = 'original' | 'a4' | 'letter';
@@ -27,29 +28,62 @@ export default function ImgToPDF() {
     const inputRef = useRef<HTMLInputElement>(null);
     const dragItem = useRef<number | null>(null);
     const dragOverItem = useRef<number | null>(null);
+    const itemUrlsRef = useRef<string[]>([]);
 
     const ACCEPT = 'image/jpeg,image/png,image/webp,image/gif';
 
+    useEffect(() => {
+        itemUrlsRef.current = items.map((item) => item.url);
+    }, [items]);
+    useEffect(() => () => itemUrlsRef.current.forEach(revokeObjectUrl), []);
+    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
+
     const addFiles = (files: FileList | File[]) => {
-        const imgs = Array.from(files).filter(f => f.type.startsWith('image/'));
+        const imgs = Array.from(files).filter(isImageFile);
         if (!imgs.length) { setErrorMsg('Please upload image files (JPG, PNG, WebP).'); return; }
-        setErrorMsg(''); setDownloadUrl(null); setStatus('idle');
-        Promise.all(imgs.map(f => new Promise<ImgItem>(res => {
-            const reader = new FileReader();
-            reader.onload = e => res({ id: crypto.randomUUID(), file: f, url: e.target!.result as string, name: f.name });
-            reader.readAsDataURL(f);
-        }))).then(newItems => setItems(prev => [...prev, ...newItems]));
+        setErrorMsg('');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
+        setStatus('idle');
+        const newItems = imgs.map((file) => ({
+            id: crypto.randomUUID(),
+            file,
+            url: URL.createObjectURL(file),
+            name: file.name,
+        }));
+        setItems((prev) => [...prev, ...newItems]);
     };
 
-    const removeItem = (id: string) => setItems(prev => prev.filter(i => i.id !== id));
+    const removeItem = (id: string) => {
+        setItems(prev => {
+            const item = prev.find((entry) => entry.id === id);
+            revokeObjectUrl(item?.url ?? null);
+            return prev.filter(i => i.id !== id);
+        });
+        setStatus('idle');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
+    };
     const handleDragStart = (idx: number) => { dragItem.current = idx; };
     const handleDragEnter = (idx: number) => { dragOverItem.current = idx; };
     const handleDragEnd = () => {
-        if (dragItem.current === null || dragOverItem.current === null) return;
-        const updated = [...items];
-        const dragged = updated.splice(dragItem.current, 1)[0];
-        updated.splice(dragOverItem.current, 0, dragged);
-        setItems(updated); dragItem.current = null; dragOverItem.current = null;
+        if (dragItem.current !== null && dragOverItem.current !== null && dragItem.current !== dragOverItem.current) {
+            const updated = [...items];
+            const dragged = updated.splice(dragItem.current, 1)[0];
+            updated.splice(dragOverItem.current, 0, dragged);
+            setItems(updated);
+            setStatus('idle');
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return null;
+            });
+        }
+        dragItem.current = null;
+        dragOverItem.current = null;
     };
 
     const handleConvert = async () => {
@@ -66,8 +100,8 @@ export default function ImgToPDF() {
                 setProgress(`Embedding image ${i + 1}/${items.length}…`);
                 const item = items[i];
                 const bytes = await item.file.arrayBuffer();
-                const isJpg = item.file.type === 'image/jpeg';
-                const isPng = item.file.type === 'image/png';
+                const isJpg = isJpegFile(item.file);
+                const isPng = isPngFile(item.file);
 
                 let img;
                 if (isJpg) img = await doc.embedJpg(bytes);
@@ -79,7 +113,7 @@ export default function ImgToPDF() {
                     await new Promise(r => { image.onload = r; image.src = item.url; });
                     canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
                     canvas.getContext('2d')!.drawImage(image, 0, 0);
-                    const jpegBytes = await fetch(canvas.toDataURL('image/jpeg', 0.92)).then(r => r.arrayBuffer());
+                    const jpegBytes = await (await canvasToBlob(canvas, 'image/jpeg', 0.92)).arrayBuffer();
                     img = await doc.embedJpg(jpegBytes);
                 }
 
@@ -100,7 +134,10 @@ export default function ImgToPDF() {
             if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             setProgress('Saving…');
             const bytes = await doc.save();
-            setDownloadUrl(URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type: 'application/pdf' })));
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type: 'application/pdf' }));
+            });
             setProgress(''); setStatus('done');
         } catch (e) { console.error(e); setErrorMsg('Conversion failed.'); setStatus('error'); }
     };
@@ -160,7 +197,15 @@ export default function ImgToPDF() {
                             <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider block mb-2">Page Size</label>
                             <div className="flex gap-2 flex-wrap">
                                 {PAGE_SIZES.map(s => (
-                                    <button key={s.value} onClick={() => setPageSize(s.value)}
+                                    <button key={s.value} onClick={() => {
+                                        if (pageSize === s.value) return;
+                                        setPageSize(s.value);
+                                        setStatus('idle');
+                                        setDownloadUrl((prev) => {
+                                            revokeObjectUrl(prev);
+                                            return null;
+                                        });
+                                    }}
                                         className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${pageSize === s.value ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
                                         {s.label}
                                     </button>

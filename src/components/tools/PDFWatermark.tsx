@@ -5,6 +5,7 @@ import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { canvasToObjectUrl, isPdfFile, loadPdfDocument, renderPdfPageToCanvas, revokeObjectUrl } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -52,8 +53,8 @@ export default function PDFWatermark() {
         const ctx = canvas.getContext('2d')!;
         ctx.putImageData(new ImageData(new Uint8ClampedArray(raw.data), size.w, size.h), 0, 0);
 
-        // Scale font size to match canvas resolution (scale=1.5)
-        const scaledFontSize = fontSize * 1.5;
+        // Scale font size to match canvas resolution (scale=1.35)
+        const scaledFontSize = fontSize * 1.35;
         ctx.font = `bold ${scaledFontSize}px Helvetica, Arial, sans-serif`;
         ctx.fillStyle = `${CANVAS_COLOR[color]}${opacity})`;
         ctx.textBaseline = 'middle';
@@ -75,28 +76,27 @@ export default function PDFWatermark() {
             ctx.fillText(text, x, y);
         }
 
-        setPreviewUrl(canvas.toDataURL('image/jpeg', 0.85));
+        canvasToObjectUrl(canvas, 'image/jpeg', 0.85)
+            .then((url) => {
+                setPreviewUrl((prev) => {
+                    revokeObjectUrl(prev);
+                    return url;
+                });
+            })
+            .catch(console.error);
     }, [text, opacity, fontSize, position, color]);
 
     useEffect(() => { renderPreview(); }, [renderPreview]);
+    useEffect(() => () => revokeObjectUrl(previewUrl), [previewUrl]);
+    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     // ── Load page 1 ───────────────────────────────────────────────────
     const loadPage1 = useCallback(async (file: File) => {
         setPreviewLoading(true); setPreviewUrl(null);
         page1Ref.current = null; page1SizeRef.current = null;
         try {
-            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-            pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
-            const doc = await pdfjs.getDocument({ 
-                data: new Uint8Array(await file.arrayBuffer()),
-                cMapUrl: '/cmaps/',
-                cMapPacked: true,
-            }).promise;
-            const page = await doc.getPage(1);
-            const viewport = page.getViewport({ scale: 1.5 });
-            const canvas = document.createElement('canvas');
-            canvas.width = viewport.width; canvas.height = viewport.height;
-            await page.render({ canvasContext: canvas.getContext('2d')!, viewport } as Parameters<typeof page.render>[0]).promise;
+            const doc = await loadPdfDocument(await file.arrayBuffer());
+            const canvas = await renderPdfPageToCanvas(doc, 1, { scale: 1.35, willReadFrequently: true });
             const imageData = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height);
             page1Ref.current = imageData;
             page1SizeRef.current = { w: canvas.width, h: canvas.height };
@@ -106,8 +106,12 @@ export default function PDFWatermark() {
     }, [renderPreview]);
 
     const handleFile = (file: File) => {
-        if (file.type !== 'application/pdf') { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file; setFileName(file.name); setErrorMsg(''); setStatus('idle'); setDownloadUrl(null);
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
+        fileRef.current = file; setFileName(file.name); setErrorMsg(''); setStatus('idle');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
         loadPage1(file);
     };
 
@@ -141,7 +145,10 @@ export default function PDFWatermark() {
 
             if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             const outBytes = await doc.save();
-            setDownloadUrl(URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' })));
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' }));
+            });
             setProgress(''); setStatus('done');
         } catch (e) { console.error(e); setErrorMsg('Failed to add watermark.'); setStatus('error'); }
     };

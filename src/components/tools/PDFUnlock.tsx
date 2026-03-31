@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { isPdfFile, revokeObjectUrl } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -18,9 +19,15 @@ export default function PDFUnlock() {
     const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
 
+    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
+
     const handleFile = (file: File) => {
-        if (file.type !== 'application/pdf') { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file; setFileName(file.name); setErrorMsg(''); setStatus('idle'); setDownloadUrl(null);
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
+        fileRef.current = file; setFileName(file.name); setErrorMsg(''); setStatus('idle');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
     };
 
     const handleUnlock = async () => {
@@ -41,7 +48,10 @@ export default function PDFUnlock() {
             // Save without encryption
             const outBytes = await doc.save({ useObjectStreams: false });
             if (isCancelledRef.current) { setStatus('idle'); return; }
-            setDownloadUrl(URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' })));
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' }));
+            });
             setStatus('done');
         } catch (e: unknown) {
             console.error(e);

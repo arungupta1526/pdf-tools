@@ -53,7 +53,7 @@ docker build -t pdf-tools .
 
 - Reads the `Dockerfile`
 - Prepares the Node environment and installs dependencies
-- Builds the Next.js application (standalone mode)
+- Builds the Next.js application as a static export
 - Creates an optimized Docker image named `pdf-tools`
 
 The `.` means:
@@ -201,7 +201,7 @@ localhost:3000
    ↓
 Docker Container
    ↓
-Node.js (Next.js server core)
+Node.js static file server
    ↓
 Serves the web application UI
    ↓

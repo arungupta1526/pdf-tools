@@ -5,6 +5,7 @@ import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { canvasToBlob, canvasToObjectUrl, isPdfFile, loadPdfDocument, mapConcurrent, renderPdfPageToCanvas, revokeObjectUrl } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -37,27 +38,27 @@ export default function PDFGrayscale() {
             d[px] = d[px + 1] = d[px + 2] = grey;
         }
         ctx.putImageData(copy, 0, 0);
-        setPreviewUrl(canvas.toDataURL('image/jpeg', 0.85));
+
+        canvasToObjectUrl(canvas, 'image/jpeg', 0.85)
+            .then((url) => {
+                setPreviewUrl((prev) => {
+                    revokeObjectUrl(prev);
+                    return url;
+                });
+            })
+            .catch(console.error);
     }, []);
 
     useEffect(() => { renderGrayscalePreview(); }, [renderGrayscalePreview]);
+    useEffect(() => () => revokeObjectUrl(previewUrl), [previewUrl]);
+    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     const loadPage1 = useCallback(async (file: File) => {
         setPreviewLoading(true); setPreviewUrl(null);
         page1Ref.current = null; page1SizeRef.current = null;
         try {
-            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-            pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
-            const doc = await pdfjs.getDocument({ 
-                data: new Uint8Array(await file.arrayBuffer()),
-                cMapUrl: '/cmaps/',
-                cMapPacked: true,
-            }).promise;
-            const page = await doc.getPage(1);
-            const viewport = page.getViewport({ scale: 1.5 });
-            const canvas = document.createElement('canvas');
-            canvas.width = viewport.width; canvas.height = viewport.height;
-            await page.render({ canvasContext: canvas.getContext('2d')!, viewport } as Parameters<typeof page.render>[0]).promise;
+            const doc = await loadPdfDocument(await file.arrayBuffer());
+            const canvas = await renderPdfPageToCanvas(doc, 1, { scale: 1.35, willReadFrequently: true });
             const imageData = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height);
             page1Ref.current = imageData; page1SizeRef.current = { w: canvas.width, h: canvas.height };
             renderGrayscalePreview();
@@ -65,9 +66,14 @@ export default function PDFGrayscale() {
     }, [renderGrayscalePreview]);
 
     const handleFile = (file: File) => {
-        if (file.type !== 'application/pdf') { setErrorMsg('Please upload a PDF.'); return; }
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
         fileRef.current = file; setFileName(file.name); setOriginalSize(file.size);
-        setErrorMsg(''); setStatus('idle'); setDownloadUrl(null); loadPage1(file);
+        setErrorMsg(''); setStatus('idle');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
+        loadPage1(file);
     };
 
     const handleProcess = async () => {
@@ -75,38 +81,49 @@ export default function PDFGrayscale() {
         setStatus('processing'); setErrorMsg('');
         isCancelledRef.current = false;
         try {
-            const [pdfjs, { PDFDocument }] = await Promise.all([import('pdfjs-dist/legacy/build/pdf.mjs'), import('pdf-lib')]);
-            pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
-            const buf = await fileRef.current.arrayBuffer();
-            const pdfjsDoc = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
+            const [{ PDFDocument }, buf] = await Promise.all([import('pdf-lib'), fileRef.current.arrayBuffer()]);
+            const pdfjsDoc = await loadPdfDocument(buf);
             const outDoc = await PDFDocument.create();
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d')!;
 
-            for (let i = 1; i <= pdfjsDoc.numPages; i++) {
-                if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
+            const pScale = 1.6;
+            const pageNumbers = Array.from({ length: pdfjsDoc.numPages }, (_, i) => i + 1);
+
+            const batchResults = await mapConcurrent(pageNumbers, 3, async (i: number) => {
+                if (isCancelledRef.current) throw new Error('CANCELLED');
                 setProgress(`Page ${i}/${pdfjsDoc.numPages}…`);
-                const page = await pdfjsDoc.getPage(i);
-                const viewport = page.getViewport({ scale: 2 });
-                canvas.width = viewport.width; canvas.height = viewport.height;
-                await page.render({ canvasContext: ctx, viewport } as Parameters<typeof page.render>[0]).promise;
+                const canvas = await renderPdfPageToCanvas(pdfjsDoc, i, { scale: pScale, willReadFrequently: true });
+                const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const d = imageData.data;
-                for (let px = 0; px < d.length; px += 4) {
-                    const g = Math.round(0.299 * d[px] + 0.587 * d[px + 1] + 0.114 * d[px + 2]);
-                    d[px] = d[px + 1] = d[px + 2] = g;
+                const data32 = new Uint32Array(d.buffer);
+                
+                for (let px = 0; px < data32.length; px++) {
+                    const val = data32[px];
+                    const r = val & 0xFF;
+                    const g = (val >> 8) & 0xFF;
+                    const b = (val >> 16) & 0xFF;
+                    const a = val & 0xFF000000;
+                    const grey = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+                    data32[px] = a | (grey << 16) | (grey << 8) | grey;
                 }
                 ctx.putImageData(imageData, 0, 0);
-                const jpegBytes = await fetch(canvas.toDataURL('image/jpeg', 0.88)).then(r => r.arrayBuffer());
-                const img = await outDoc.embedJpg(jpegBytes);
-                const p = outDoc.addPage([viewport.width / 2, viewport.height / 2]);
-                p.drawImage(img, { x: 0, y: 0, width: viewport.width / 2, height: viewport.height / 2 });
+                const jpegBytes = await (await canvasToBlob(canvas, 'image/jpeg', 0.84)).arrayBuffer();
+                return { jpegBytes, w: canvas.width, h: canvas.height };
+            });
+
+            for (const res of batchResults) {
+                const img = await outDoc.embedJpg(res.jpegBytes);
+                const p = outDoc.addPage([res.w / pScale, res.h / pScale]);
+                p.drawImage(img, { x: 0, y: 0, width: res.w / pScale, height: res.h / pScale });
             }
 
             if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             const outBytes = await outDoc.save();
             setOutputSize(outBytes.byteLength);
-            setDownloadUrl(URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' })));
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' }));
+            });
             setProgress(''); setStatus('done');
         } catch (e) { console.error(e); setErrorMsg('Conversion failed.'); setStatus('error'); }
     };

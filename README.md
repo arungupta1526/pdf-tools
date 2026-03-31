@@ -94,6 +94,8 @@ npm run build
 npm run start
 ```
 
+This project uses `output: "export"`, so `npm run start` serves the generated `out/` folder with a small static Node server.
+
 ### Lint
 
 ```bash

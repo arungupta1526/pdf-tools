@@ -1,17 +1,15 @@
 'use client';
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
 import DropZone from '@/components/DropZone';
+import { isPdfFile, loadPdfDocument, mapConcurrent, renderPdfPageImage, revokeObjectUrl } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
 
 interface PageThumb { pageNum: number; url: string; remove: boolean; }
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type PdfjsDoc = any;
 
 export default function PDFRemovePages() {
     const [status, setStatus] = useState<Status>('idle');
@@ -21,35 +19,40 @@ export default function PDFRemovePages() {
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
-    const pdfjsDocRef = useRef<PdfjsDoc>(null);
+    const thumbUrlsRef = useRef<string[]>([]);
+
+    useEffect(() => {
+        thumbUrlsRef.current = thumbs.map((thumb) => thumb.url);
+    }, [thumbs]);
+    useEffect(() => () => thumbUrlsRef.current.forEach(revokeObjectUrl), []);
+    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     const loadThumbs = useCallback(async (file: File) => {
-        setStatus('loading'); setThumbs([]);
+        setStatus('loading');
+        setThumbs((prev) => {
+            prev.forEach((thumb) => revokeObjectUrl(thumb.url));
+            return [];
+        });
         try {
-            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-            pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
-            const doc = await pdfjs.getDocument({ 
-                data: new Uint8Array(await file.arrayBuffer()),
-                cMapUrl: '/cmaps/',
-                cMapPacked: true,
-            }).promise;
-            pdfjsDocRef.current = doc;
-            const results: PageThumb[] = [];
-            for (let i = 1; i <= doc.numPages; i++) {
-                const page = await doc.getPage(i);
-                const viewport = page.getViewport({ scale: 0.4 });
-                const canvas = document.createElement('canvas');
-                canvas.width = viewport.width; canvas.height = viewport.height;
-                await page.render({ canvasContext: canvas.getContext('2d')!, viewport } as Parameters<typeof page.render>[0]).promise;
-                results.push({ pageNum: i, url: canvas.toDataURL('image/jpeg', 0.7), remove: false });
-            }
+            const doc = await loadPdfDocument(await file.arrayBuffer());
+            const pageNumbers = Array.from({ length: doc.numPages }, (_, index) => index + 1);
+            const results = await mapConcurrent(pageNumbers, 3, async (pageNum) => ({
+                pageNum,
+                url: await renderPdfPageImage(doc, pageNum, { scale: 0.4, quality: 0.7 }),
+                remove: false,
+            }));
             setThumbs(results); setStatus('ready');
         } catch (e) { console.error(e); setErrorMsg('Failed to load PDF.'); setStatus('error'); }
     }, []);
 
     const handleFile = (file: File) => {
-        if (file.type !== 'application/pdf') { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file; setFileName(file.name); setErrorMsg(''); setDownloadUrl(null); loadThumbs(file);
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
+        fileRef.current = file; setFileName(file.name); setErrorMsg('');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
+        loadThumbs(file);
     };
 
     const toggleRemove = (n: number) => setThumbs(prev => prev.map(t => t.pageNum === n ? { ...t, remove: !t.remove } : t));
@@ -71,7 +74,10 @@ export default function PDFRemovePages() {
             pages.forEach(p => newDoc.addPage(p));
             if (isCancelledRef.current) { setStatus('ready'); return; }
             const outBytes = await newDoc.save();
-            setDownloadUrl(URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' })));
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' }));
+            });
             setStatus('done');
         } catch (e) { console.error(e); setErrorMsg('Failed to remove pages.'); setStatus('ready'); }
     };

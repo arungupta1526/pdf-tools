@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { isPdfFile, revokeObjectUrl } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -21,9 +22,15 @@ export default function PDFProtect() {
     const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
 
+    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
+
     const handleFile = (file: File) => {
-        if (file.type !== 'application/pdf') { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file; setFileName(file.name); setErrorMsg(''); setStatus('idle'); setDownloadUrl(null);
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
+        fileRef.current = file; setFileName(file.name); setErrorMsg(''); setStatus('idle');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
     };
 
     const handleProtect = async () => {
@@ -58,7 +65,10 @@ export default function PDFProtect() {
             if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             setProgress('');
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
-            setDownloadUrl(URL.createObjectURL(blob));
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(blob);
+            });
             setStatus('done');
         } catch (e) { console.error(e); setErrorMsg('Protection failed. Try a different PDF.'); setStatus('error'); }
     };

@@ -5,6 +5,7 @@ import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { canvasToBlob, isPdfFile, loadPdfDocument, mapConcurrent, renderPdfPageToCanvas, revokeObjectUrl } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -57,12 +58,15 @@ export default function PDFNup() {
     const fileRef = useRef<File | null>(null);
 
     const handleFile = (file: File) => {
-        if (file.type !== 'application/pdf') { setErrorMsg('Please upload a PDF.'); return; }
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
         fileRef.current = file;
         setFileName(file.name);
         setErrorMsg('');
         setStatus('idle');
-        setDownloadUrl(null);
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
     };
 
     const handleProcess = async () => {
@@ -72,15 +76,9 @@ export default function PDFNup() {
 
         try {
             const { PDFDocument, rgb } = await import('pdf-lib');
-            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-            pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
 
             // Load source with pdfjs for rendering
-            const srcDoc = await pdfjs.getDocument({
-                data: new Uint8Array(await fileRef.current.arrayBuffer()),
-                cMapUrl: '/cmaps/',
-                cMapPacked: true,
-            }).promise;
+            const srcDoc = await loadPdfDocument(await fileRef.current.arrayBuffer());
             const totalPages = srcDoc.numPages;
 
             // Create output PDF
@@ -128,54 +126,33 @@ export default function PDFNup() {
                 setProgress(`Sheet ${sheet + 1}/${totalSheets}…`);
                 const outPage = outDoc.addPage([outW, outH]);
 
+                const sheetPageIndices = [];
                 for (let slot = 0; slot < pagesPerSheet; slot++) {
-                    if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
                     const pageIdx = sheet * pagesPerSheet + slot;
-                    if (pageIdx >= totalPages) break;
+                    if (pageIdx < totalPages) sheetPageIndices.push({ pageIdx, slot });
+                }
 
-                    // Determine grid position
-                    const row = Math.floor(slot / cols);
-                    let col = slot % cols;
-                    if (direction === 'rtl') col = cols - 1 - col;
-
-                    // Render source page to canvas
+                const sheetResults = await mapConcurrent(sheetPageIndices, 2, async ({ pageIdx, slot }: { pageIdx: number, slot: number }) => {
+                    if (isCancelledRef.current) throw new Error('CANCELLED');
                     const srcPage = await srcDoc.getPage(pageIdx + 1);
                     const vp = srcPage.getViewport({ scale: 1 });
+                    const scale = Math.min(cellW / vp.width, cellH / vp.height);
+                    
+                    const canvas = await renderPdfPageToCanvas(srcDoc, pageIdx + 1, { scale: scale * 2 });
+                    const imgBytes = await (await canvasToBlob(canvas, 'image/jpeg', 0.88)).arrayBuffer();
+                    return { imgBytes, slot, vp, scale };
+                });
 
-                    // Scale to fit cell while maintaining aspect ratio
-                    const scaleX = cellW / vp.width;
-                    const scaleY = cellH / vp.height;
-                    const scale = Math.min(scaleX, scaleY);
+                for (const res of sheetResults) {
+                    const img = await outDoc.embedJpg(res.imgBytes);
+                    const row = Math.floor(res.slot / cols);
+                    let col = res.slot % cols;
+                    if (direction === 'rtl') col = cols - 1 - col;
 
-                    const renderW = Math.floor(vp.width * scale * 2); // 2x for quality
-                    const renderH = Math.floor(vp.height * scale * 2);
-
-                    const canvas = document.createElement('canvas');
-                    canvas.width = renderW;
-                    canvas.height = renderH;
-                    const ctx = canvas.getContext('2d')!;
-                    ctx.fillStyle = '#ffffff';
-                    ctx.fillRect(0, 0, renderW, renderH);
-
-                    const renderVP = srcPage.getViewport({ scale: scale * 2 });
-                    await srcPage.render({
-                        canvasContext: ctx,
-                        viewport: renderVP,
-                    } as Parameters<typeof srcPage.render>[0]).promise;
-
-                    // Embed image into pdf-lib
-                    const imgDataUrl = canvas.toDataURL('image/jpeg', 0.92);
-                    const imgBytes = Uint8Array.from(atob(imgDataUrl.split(',')[1]), c => c.charCodeAt(0));
-                    const img = await outDoc.embedJpg(imgBytes);
-
-                    // Calculate position (pdf-lib origin is bottom-left)
-                    const drawW = vp.width * scale;
-                    const drawH = vp.height * scale;
-
-                    // Center within cell
+                    const drawW = res.vp.width * res.scale;
+                    const drawH = res.vp.height * res.scale;
                     const cellX = om + col * (cellW + im);
-                    const cellY = outH - om - (row + 1) * cellH - row * im; // flip Y
-
+                    const cellY = outH - om - (row + 1) * cellH - row * im;
                     const offsetX = (cellW - drawW) / 2;
                     const offsetY = (cellH - drawH) / 2;
 
@@ -186,7 +163,6 @@ export default function PDFNup() {
                         height: drawH,
                     });
 
-                    // Draw border
                     if (showBorder) {
                         outPage.drawRectangle({
                             x: cellX + offsetX,
@@ -204,7 +180,10 @@ export default function PDFNup() {
             if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             const outBytes = await outDoc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
-            setDownloadUrl(URL.createObjectURL(blob));
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(blob);
+            });
             setProgress('');
             setStatus('done');
         } catch (e) {

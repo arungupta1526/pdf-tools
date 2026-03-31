@@ -1,14 +1,23 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { isPdfFile, revokeObjectUrl } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
 
 interface Metadata { title: string; author: string; subject: string; keywords: string; creator: string; producer: string; }
+
+function formatKeywords(value: string | string[] | undefined) {
+    if (Array.isArray(value)) {
+        return value.join(', ');
+    }
+
+    return value ?? '';
+}
 
 export default function PDFMetadata() {
     const [status, setStatus] = useState<Status>('idle');
@@ -19,9 +28,15 @@ export default function PDFMetadata() {
     const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
 
+    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
+
     const handleFile = async (file: File) => {
-        if (file.type !== 'application/pdf') { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file; setFileName(file.name); setErrorMsg(''); setStatus('loading'); setDownloadUrl(null);
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
+        fileRef.current = file; setFileName(file.name); setErrorMsg(''); setStatus('loading');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
         try {
             const { PDFDocument } = await import('pdf-lib');
             const bytes = await file.arrayBuffer();
@@ -30,7 +45,7 @@ export default function PDFMetadata() {
                 title: doc.getTitle() ?? '',
                 author: doc.getAuthor() ?? '',
                 subject: doc.getSubject() ?? '',
-                keywords: doc.getKeywords() ?? '',
+                keywords: formatKeywords(doc.getKeywords()),
                 creator: doc.getCreator() ?? '',
                 producer: doc.getProducer() ?? '',
             });
@@ -51,12 +66,15 @@ export default function PDFMetadata() {
             doc.setTitle(meta.title);
             doc.setAuthor(meta.author);
             doc.setSubject(meta.subject);
-            doc.setKeywords([meta.keywords]);
+            doc.setKeywords(meta.keywords.split(',').map((keyword) => keyword.trim()).filter(Boolean));
             doc.setCreator(meta.creator);
             doc.setProducer(meta.producer);
             if (isCancelledRef.current) { setStatus('ready'); return; }
             const outBytes = await doc.save();
-            setDownloadUrl(URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' })));
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' }));
+            });
             setStatus('done');
         } catch (e) { console.error(e); setErrorMsg('Failed to save metadata.'); setStatus('ready'); }
     };
