@@ -1,19 +1,17 @@
 'use client';
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { canvasToBlob, isPdfFile, loadPdfDocument, mapConcurrent, renderPdfPageImage, renderPdfPageToCanvas, revokeObjectUrl, type PdfJsDocument } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
 type OutputFormat = 'pdf-merged' | 'pdf-zip' | 'jpg-zip' | 'png-zip';
 type SplitMode = 'select' | 'range' | 'all';
 
 interface PageThumb { pageNum: number; url: string; selected: boolean; }
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type PdfjsDoc = any;
 
 const OUTPUT_FORMATS: { value: OutputFormat; label: string; icon: string; desc: string }[] = [
     { value: 'pdf-merged', icon: '📄', label: 'Single PDF', desc: 'Selected pages merged into one PDF' },
@@ -36,36 +34,42 @@ export default function PDFSplit() {
     const [downloadName, setDownloadName] = useState('');
     const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
-    const pdfjsDocRef = useRef<PdfjsDoc>(null);
+    const pdfjsDocRef = useRef<PdfJsDocument | null>(null);
+    const thumbUrlsRef = useRef<string[]>([]);
+
+    useEffect(() => {
+        thumbUrlsRef.current = thumbs.map((thumb) => thumb.url);
+    }, [thumbs]);
+    useEffect(() => () => thumbUrlsRef.current.forEach(revokeObjectUrl), []);
+    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     // ── Load page thumbnails ───────────────────────────────────────────────
     const loadThumbs = useCallback(async (file: File) => {
-        setStatus('loading'); setThumbs([]); setDownloadUrl(null);
+        setStatus('loading');
+        setThumbs((prev) => {
+            prev.forEach((thumb) => revokeObjectUrl(thumb.url));
+            return [];
+        });
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
         try {
-            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-            pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
-            const doc = await pdfjs.getDocument({ 
-                data: new Uint8Array(await file.arrayBuffer()),
-                cMapUrl: '/cmaps/',
-                cMapPacked: true,
-            }).promise;
+            const doc = await loadPdfDocument(await file.arrayBuffer());
             pdfjsDocRef.current = doc;
             setTotalPages(doc.numPages);
-            const results: PageThumb[] = [];
-            for (let i = 1; i <= doc.numPages; i++) {
-                const page = await doc.getPage(i);
-                const viewport = page.getViewport({ scale: 0.4 });
-                const canvas = document.createElement('canvas');
-                canvas.width = viewport.width; canvas.height = viewport.height;
-                await page.render({ canvasContext: canvas.getContext('2d')!, viewport } as Parameters<typeof page.render>[0]).promise;
-                results.push({ pageNum: i, url: canvas.toDataURL('image/jpeg', 0.7), selected: true });
-            }
+            const pageNumbers = Array.from({ length: doc.numPages }, (_, index) => index + 1);
+            const results = await mapConcurrent(pageNumbers, 3, async (pageNum) => ({
+                pageNum,
+                url: await renderPdfPageImage(doc, pageNum, { scale: 0.4, quality: 0.7 }),
+                selected: true,
+            }));
             setThumbs(results); setStatus('ready');
         } catch (e) { console.error(e); setErrorMsg('Failed to load PDF.'); setStatus('error'); }
     }, []);
 
     const handleFile = (file: File) => {
-        if (file.type !== 'application/pdf') { setErrorMsg('Please upload a PDF.'); return; }
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
         fileRef.current = file; setFileName(file.name); setErrorMsg(''); loadThumbs(file);
     };
 
@@ -94,12 +98,7 @@ export default function PDFSplit() {
     // ── Render a page at full quality → canvas ────────────────────────────
     const renderPageCanvas = async (pageNum: number, scale = 2): Promise<HTMLCanvasElement> => {
         const doc = pdfjsDocRef.current!;
-        const page = await doc.getPage(pageNum);
-        const viewport = page.getViewport({ scale });
-        const canvas = document.createElement('canvas');
-        canvas.width = viewport.width; canvas.height = viewport.height;
-        await page.render({ canvasContext: canvas.getContext('2d')!, viewport } as Parameters<typeof page.render>[0]).promise;
-        return canvas;
+        return renderPdfPageToCanvas(doc, pageNum, { scale });
     };
 
     // ── Main export handler ───────────────────────────────────────────────
@@ -108,7 +107,11 @@ export default function PDFSplit() {
         const selectedPages = getSelectedPages();
         if (selectedPages.length === 0) { setErrorMsg('Select at least one page.'); return; }
 
-        setStatus('processing'); setErrorMsg(''); setDownloadUrl(null);
+        setStatus('processing'); setErrorMsg('');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
         isCancelledRef.current = false;
         const baseName = fileName.replace(/\.pdf$/i, '');
 
@@ -129,7 +132,10 @@ export default function PDFSplit() {
                 setProgress('Saving…');
                 const bytes = await newDoc.save();
                 const blob = new Blob([bytes as unknown as BlobPart], { type: 'application/pdf' });
-                setDownloadUrl(URL.createObjectURL(blob));
+                setDownloadUrl((prev) => {
+                    revokeObjectUrl(prev);
+                    return URL.createObjectURL(blob);
+                });
                 setDownloadName(`${baseName}-pages.pdf`);
                 setProgress(''); setStatus('done');
                 return;
@@ -140,37 +146,41 @@ export default function PDFSplit() {
             const zip = new JSZip();
 
             const { PDFDocument } = outputFormat === 'pdf-zip' ? await import('pdf-lib') : { PDFDocument: null };
-            const srcDoc = outputFormat === 'pdf-zip' && PDFDocument
-                ? await PDFDocument.load(await fileRef.current.arrayBuffer()) : null;
+            const srcDocBytes = outputFormat === 'pdf-zip' ? await fileRef.current.arrayBuffer() : null;
 
-            for (let idx = 0; idx < selectedPages.length; idx++) {
-                if (isCancelledRef.current) { setStatus('ready'); setProgress(''); return; }
-                const pageNum = selectedPages[idx];
-                setProgress(`Processing page ${pageNum} (${idx + 1}/${selectedPages.length})…`);
+            const results = await mapConcurrent(selectedPages, 3, async (pageNum) => {
+                if (isCancelledRef.current) throw new Error('CANCELLED');
+                setProgress(`Processing page ${pageNum}…`);
 
-                if (outputFormat === 'pdf-zip' && srcDoc && PDFDocument) {
+                if (outputFormat === 'pdf-zip' && PDFDocument && srcDocBytes) {
+                    const srcDoc = await PDFDocument.load(srcDocBytes);
                     const newDoc = await PDFDocument.create();
                     const [copied] = await newDoc.copyPages(srcDoc, [pageNum - 1]);
                     newDoc.addPage(copied);
-                    zip.file(`page-${pageNum}.pdf`, await newDoc.save());
+                    return { name: `page-${pageNum}.pdf`, data: await newDoc.save() };
                 } else {
-                    // Image formats
-                    const canvas = await renderPageCanvas(pageNum, 2);
+                    const canvas = await renderPageCanvas(pageNum, 1.6);
                     const isJpg = outputFormat === 'jpg-zip';
                     const mimeType = isJpg ? 'image/jpeg' : 'image/png';
                     const quality = isJpg ? 0.92 : undefined;
-                    const dataUrl = canvas.toDataURL(mimeType, quality);
-                    const base64 = dataUrl.split(',')[1];
                     const ext = isJpg ? 'jpg' : 'png';
-                    zip.file(`page-${pageNum}.${ext}`, base64, { base64: true });
+                    const blob = await canvasToBlob(canvas, mimeType, quality);
+                    return { name: `page-${pageNum}.${ext}`, data: blob };
                 }
+            });
+
+            for (const res of results) {
+                zip.file(res.name, res.data);
             }
 
             setProgress('Zipping…');
             if (isCancelledRef.current) { setStatus('ready'); setProgress(''); return; }
             const zipBlob = await zip.generateAsync({ type: 'blob' });
             const ext = outputFormat === 'pdf-zip' ? 'pdf' : outputFormat === 'jpg-zip' ? 'jpg' : 'png';
-            setDownloadUrl(URL.createObjectURL(zipBlob));
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(zipBlob);
+            });
             setDownloadName(`${baseName}-pages-${ext}.zip`);
             setProgress(''); setStatus('done');
         } catch (e) { console.error(e); setErrorMsg('Export failed.'); setStatus('ready'); }

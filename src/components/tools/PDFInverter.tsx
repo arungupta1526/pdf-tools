@@ -4,6 +4,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { canvasToBlob, canvasToObjectUrl, isPdfFile, loadPdfDocument, renderPdfPageToCanvas, revokeObjectUrl, type PdfJsDocument } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -69,9 +70,6 @@ const PRESET_COLORS: { label: string; hex: string; bg: string }[] = [
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type PdfjsDoc = any;
-
 export default function PDFInverter() {
     const [status, setStatus] = useState<Status>('idle');
     const [fileName, setFileName] = useState('');
@@ -96,12 +94,13 @@ export default function PDFInverter() {
     const fileRef = useRef<File | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const colorPickerRef = useRef<HTMLInputElement>(null);
-    const pdfjsDocRef = useRef<PdfjsDoc>(null);
-    // Cache: pageNum → raw ImageData
+    const pdfjsDocRef = useRef<PdfJsDocument | null>(null);
+    // Cache: pageNum → raw ImageData (max 10 pages)
     const pageCache = useRef<Map<number, { data: ImageData; w: number; h: number }>>(new Map());
+    const CACHE_LIMIT = 10;
 
     // ── Render inverted preview from cached ImageData ─────────────────────
-    const renderInverted = useCallback((rawData: ImageData, w: number, h: number, target: [number, number, number] | null) => {
+    const renderInverted = useCallback(async (rawData: ImageData, w: number, h: number, target: [number, number, number] | null) => {
         const canvas = document.createElement('canvas');
         canvas.width = w; canvas.height = h;
         const ctx = canvas.getContext('2d')!;
@@ -112,7 +111,7 @@ export default function PDFInverter() {
             d[px] = nr; d[px + 1] = ng; d[px + 2] = nb;
         }
         ctx.putImageData(copy, 0, 0);
-        return canvas.toDataURL('image/jpeg', 0.80);
+        return canvasToObjectUrl(canvas, 'image/jpeg', 0.8);
     }, []);
 
     // ── Load a specific page (with cache) ─────────────────────────────────
@@ -123,14 +122,16 @@ export default function PDFInverter() {
         try {
             let cached = pageCache.current.get(pageNumber);
             if (!cached) {
-                const page = await doc.getPage(pageNumber);
-                const viewport = page.getViewport({ scale: 1.5 });
-                const canvas = document.createElement('canvas');
-                canvas.width = viewport.width; canvas.height = viewport.height;
-                const ctx = canvas.getContext('2d')!;
-                await page.render({ canvasContext: ctx, viewport } as Parameters<typeof page.render>[0]).promise;
+                const canvas = await renderPdfPageToCanvas(doc, pageNumber, { scale: 1.35, willReadFrequently: true });
+                const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 cached = { data: imageData, w: canvas.width, h: canvas.height };
+                
+                // Evict oldest if limit reached
+                if (pageCache.current.size >= CACHE_LIMIT) {
+                    const firstKey = pageCache.current.keys().next().value;
+                    if (firstKey !== undefined) pageCache.current.delete(firstKey);
+                }
                 pageCache.current.set(pageNumber, cached);
             }
 
@@ -138,7 +139,11 @@ export default function PDFInverter() {
             const origCanvas = document.createElement('canvas');
             origCanvas.width = cached.w; origCanvas.height = cached.h;
             origCanvas.getContext('2d')!.putImageData(cached.data, 0, 0);
-            setOriginalUrl(origCanvas.toDataURL('image/jpeg', 0.80));
+            const nextOriginalUrl = await canvasToObjectUrl(origCanvas, 'image/jpeg', 0.8);
+            setOriginalUrl((prev) => {
+                revokeObjectUrl(prev);
+                return nextOriginalUrl;
+            });
 
             // Extract swatches from page 1 only
             if (!skipSwatches && pageNumber === 1) {
@@ -147,7 +152,11 @@ export default function PDFInverter() {
 
             // Inverted preview
             const target = hexColor.length > 0 ? hexToRgb(hexColor) : null;
-            setInvertedUrl(renderInverted(cached.data, cached.w, cached.h, target));
+            const nextInvertedUrl = await renderInverted(cached.data, cached.w, cached.h, target);
+            setInvertedUrl((prev) => {
+                revokeObjectUrl(prev);
+                return nextInvertedUrl;
+            });
         } catch (e) {
             console.error('Page load error', e);
         } finally {
@@ -161,30 +170,41 @@ export default function PDFInverter() {
         if (!cached) return;
         const target = hexColor.length > 0 ? hexToRgb(hexColor) : null;
         if (hexColor.length > 0 && !target) return;
-        setInvertedUrl(renderInverted(cached.data, cached.w, cached.h, target));
+        renderInverted(cached.data, cached.w, cached.h, target)
+            .then((url) => {
+                setInvertedUrl((prev) => {
+                    revokeObjectUrl(prev);
+                    return url;
+                });
+            })
+            .catch(console.error);
     }, [hexColor, pageNum, renderInverted]);
+
+    useEffect(() => () => revokeObjectUrl(originalUrl), [originalUrl]);
+    useEffect(() => () => revokeObjectUrl(invertedUrl), [invertedUrl]);
+    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     // ── Initialize pdfjs and load page 1 on file select ──────────────────
     const initPdf = useCallback(async (file: File) => {
         setPreviewLoading(true);
-        setOriginalUrl(null);
-        setInvertedUrl(null);
+        setOriginalUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
+        setInvertedUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
         setSwatches([]);
-        setDownloadUrl(null);
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
         pageCache.current.clear();
         pdfjsDocRef.current = null;
 
         try {
-            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-            pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-                'pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url
-            ).toString();
-            const buf = await file.arrayBuffer();
-            const doc = await pdfjs.getDocument({
-                data: new Uint8Array(buf),
-                cMapUrl: '/cmaps/',
-                cMapPacked: true,
-            }).promise;
+            const doc = await loadPdfDocument(await file.arrayBuffer());
             pdfjsDocRef.current = doc;
             setTotalPages(doc.numPages);
             setPageNum(1);
@@ -199,7 +219,7 @@ export default function PDFInverter() {
     }, [loadPage]);
 
     const handleFile = useCallback((file: File) => {
-        if (file.type !== 'application/pdf') { setErrorMsg('Please upload a PDF file.'); return; }
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF file.'); return; }
         fileRef.current = file;
         setFileName(file.name);
         setStatus('idle');
@@ -233,46 +253,93 @@ export default function PDFInverter() {
             const targetRgb = hexColor.length > 0 ? hexToRgb(hexColor) : null;
             if (hexColor.length > 0 && !targetRgb) { setErrorMsg('Invalid hex color.'); setStatus('error'); return; }
 
-            const [pdfjs, { PDFDocument }] = await Promise.all([
-                import('pdfjs-dist/legacy/build/pdf.mjs'),
+            const [{ PDFDocument }, buf] = await Promise.all([
                 import('pdf-lib'),
+                file.arrayBuffer(),
             ]);
-            pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
-
-            const buf = await file.arrayBuffer();
-            const pdfjsDoc = await pdfjs.getDocument({
-                data: new Uint8Array(buf),
-                cMapUrl: '/cmaps/',
-                cMapPacked: true,
-            }).promise;
+            const pdfjsDoc = await loadPdfDocument(buf);
             const outDoc = await PDFDocument.create();
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d')!;
 
-            for (let i = 1; i <= pdfjsDoc.numPages; i++) {
+            // Parallel batch processing
+            const batchSize = 3;
+            const total = pdfjsDoc.numPages;
+
+            for (let i = 1; i <= total; i += batchSize) {
                 if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
-                setProgress(`Page ${i} / ${pdfjsDoc.numPages}…`);
-                const page = await pdfjsDoc.getPage(i);
-                const viewport = page.getViewport({ scale: 2 });
-                canvas.width = viewport.width; canvas.height = viewport.height;
-                await page.render({ canvasContext: ctx, viewport } as Parameters<typeof page.render>[0]).promise;
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const d = imageData.data;
-                for (let px = 0; px < d.length; px += 4) {
-                    const [nr, ng, nb] = invertPixel(d[px], d[px + 1], d[px + 2], targetRgb);
-                    d[px] = nr; d[px + 1] = ng; d[px + 2] = nb;
+                setProgress(`Processing page ${i} to ${Math.min(i + batchSize - 1, total)} of ${total}…`);
+
+                const batchPromises = [];
+                for (let j = i; j < i + batchSize && j <= total; j++) {
+                    batchPromises.push((async (pageNum) => {
+                        const canvas = await renderPdfPageToCanvas(pdfjsDoc, pageNum, { scale: 1.6, willReadFrequently: true });
+                        const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+                        
+
+                        // 2. Inversion logic
+                        if (!targetRgb) {
+                            // FAST: Standard Hardware-Accelerated Invert
+                            const tempCanvas = document.createElement('canvas');
+                            tempCanvas.width = canvas.width;
+                            tempCanvas.height = canvas.height;
+                            const tCtx = tempCanvas.getContext('2d')!;
+                            tCtx.filter = 'invert(100%)';
+                            tCtx.drawImage(canvas, 0, 0);
+                            ctx.clearRect(0, 0, canvas.width, canvas.height);
+                            ctx.drawImage(tempCanvas, 0, 0);
+                        } else {
+                            // FAST: Uint32Array Optimized manual loop for custom tint
+                            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                            const data32 = new Uint32Array(imageData.data.buffer);
+                            const [tr, tg, tb] = targetRgb;
+                            
+                            for (let p = 0; p < data32.length; p++) {
+                                const val = data32[p];
+                                const r = val & 0xFF;
+                                const g = (val >> 8) & 0xFF;
+                                const b = (val >> 16) & 0xFF;
+                                const a = val & 0xFF000000; // Keep alpha as is (typically 0xFF000000)
+                                
+                                const brightness = (r + g + b) / 765; // (r+g+b)/(3*255)
+                                const nr = Math.round(255 - tr * brightness);
+                                const ng = Math.round(255 - tg * brightness);
+                                const nb = Math.round(255 - tb * brightness);
+                                
+                                data32[p] = a | (nb << 16) | (ng << 8) | nr;
+                            }
+                            ctx.putImageData(imageData, 0, 0);
+                        }
+
+                        // 3. Compress & Convert
+                        // Use toBlob instead of toDataURL to avoid base64 overhead
+                        const jpegBytes = await (await canvasToBlob(canvas, 'image/jpeg', 0.88)).arrayBuffer();
+                        return { jpegBytes, width: canvas.width, height: canvas.height };
+                    })(j));
                 }
-                ctx.putImageData(imageData, 0, 0);
-                const jpegBytes = await fetch(canvas.toDataURL('image/jpeg', 0.92)).then((r) => r.arrayBuffer());
-                const img = await outDoc.embedJpg(jpegBytes);
-                const pdfPage = outDoc.addPage([viewport.width / 2, viewport.height / 2]);
-                pdfPage.drawImage(img, { x: 0, y: 0, width: viewport.width / 2, height: viewport.height / 2 });
+
+                const results = await Promise.all(batchPromises);
+
+                // Add to document in order
+                for (const res of results) {
+                    const img = await outDoc.embedJpg(res.jpegBytes);
+                    // Use actual dimensions in points (width / scale)
+                    const pScale = 1.6;
+                    const pdfPage = outDoc.addPage([res.width / pScale, res.height / pScale]);
+                    pdfPage.drawImage(img, { 
+                        x: 0, y: 0, 
+                        width: res.width / pScale, height: res.height / pScale 
+                    });
+                }
             }
 
             if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
+            setProgress('Saving PDF…');
             const outBytes = await outDoc.save();
-            const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
-            setDownloadUrl(URL.createObjectURL(blob));
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const blob = new Blob([outBytes as any], { type: 'application/pdf' });
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(blob);
+            });
             setDownloadName(`inverted-${file.name}`);
             setProgress('');
             setStatus('done');

@@ -5,6 +5,7 @@ import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { canvasToObjectUrl, isImageFile, isPdfFile, loadPdfDocument, renderPdfPageToCanvas, revokeObjectUrl, type PdfJsDocument } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
 type SignMode = 'draw' | 'type' | 'upload';
@@ -49,23 +50,20 @@ export default function PDFSign() {
     const [dragInfo, setDragInfo] = useState<{ startX: number; startY: number; initialX: number; initialY: number; initialScrollY: number } | null>(null);
 
     const fileRef = useRef<File | null>(null);
-    const pdfJsDocRef = useRef<{ getPage: (n: number) => Promise<unknown> } | null>(null);
+    const pdfJsDocRef = useRef<PdfJsDocument | null>(null);
 
     // ─── Load PDF & render first page thumbnail ───────────────────────────────
     const renderPageThumb = useCallback(async (pageNum: number) => {
         if (!pdfJsDocRef.current) return;
         try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const page: any = await pdfJsDocRef.current.getPage(pageNum);
-            const vp = page.getViewport({ scale: 1.5 });
-            const canvas = document.createElement('canvas');
-            canvas.width = vp.width;
-            canvas.height = vp.height;
-            const ctx = canvas.getContext('2d')!;
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            await page.render({ canvasContext: ctx, viewport: vp } as never).promise;
-            setPageThumb(canvas.toDataURL('image/jpeg', 0.85));
+            const page = await pdfJsDocRef.current.getPage(pageNum);
+            const vp = page.getViewport({ scale: 1.35 });
+            const canvas = await renderPdfPageToCanvas(pdfJsDocRef.current, pageNum, { scale: 1.35 });
+            const url = await canvasToObjectUrl(canvas, 'image/jpeg', 0.85);
+            setPageThumb((prev) => {
+                revokeObjectUrl(prev);
+                return url;
+            });
             setPageThumbW(vp.width);
             setPageThumbH(vp.height);
             // Get real width at scale=1 for mm→px conversion
@@ -75,21 +73,18 @@ export default function PDFSign() {
     }, []);
 
     const handleFile = useCallback(async (file: File) => {
-        if (file.type !== 'application/pdf') { setErrorMsg('Please upload a PDF.'); return; }
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
         fileRef.current = file;
         setFileName(file.name);
-        setErrorMsg(''); setDownloadUrl(null);
+        setErrorMsg('');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
         setStatus('loading');
 
         try {
-            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-            pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
-            const fileBytes = new Uint8Array(await file.arrayBuffer());
-            const doc = await pdfjs.getDocument({ 
-                data: fileBytes,
-                cMapUrl: '/cmaps/',
-                cMapPacked: true,
-            }).promise;
+            const doc = await loadPdfDocument(await file.arrayBuffer());
             pdfJsDocRef.current = doc;
             setPageCount(doc.numPages);
             setTargetPage(1);
@@ -108,6 +103,8 @@ export default function PDFSign() {
             renderPageThumb(targetPage);
         }
     }, [targetPage, renderPageThumb, status]);
+    useEffect(() => () => revokeObjectUrl(pageThumb), [pageThumb]);
+    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     // ─── Canvas drawing helpers ───────────────────────────────────────────────
     const getPos = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
@@ -160,7 +157,7 @@ export default function PDFSign() {
     }, [signMode, uploadedSig, hasDrawn, typedText, typedFont, sigColor]);
 
     const processImageFile = useCallback((file: File) => {
-        if (!file.type.startsWith('image/')) return;
+        if (!isImageFile(file)) return;
         setIsProcessing(true);
         const reader = new FileReader();
         reader.onload = (re) => {
@@ -227,7 +224,10 @@ export default function PDFSign() {
             if (isCancelledRef.current) { setStatus('ready'); return; }
             const outBytes = await doc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
-            setDownloadUrl(URL.createObjectURL(blob));
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(blob);
+            });
             setStatus('done');
         } catch (e) {
             console.error(e);

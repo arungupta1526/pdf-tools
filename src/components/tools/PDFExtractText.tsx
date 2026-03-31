@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { isPdfFile, loadPdfDocument } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -17,10 +18,17 @@ export default function PDFExtractText() {
     const [copied, setCopied] = useState(false);
     const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
+    const copyResetTimeoutRef = useRef<number | null>(null);
+
+    useEffect(() => () => {
+        if (copyResetTimeoutRef.current !== null) {
+            window.clearTimeout(copyResetTimeoutRef.current);
+        }
+    }, []);
 
     const handleFile = (file: File) => {
-        if (file.type !== 'application/pdf') { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file; setFileName(file.name); setErrorMsg(''); setStatus('idle'); setText('');
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
+        fileRef.current = file; setFileName(file.name); setErrorMsg(''); setStatus('idle'); setText(''); setCopied(false);
     };
 
     const handleExtract = async () => {
@@ -28,13 +36,7 @@ export default function PDFExtractText() {
         setStatus('processing'); setErrorMsg(''); setText('');
         isCancelledRef.current = false;
         try {
-            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-            pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
-            const doc = await pdfjs.getDocument({
-                data: new Uint8Array(await fileRef.current.arrayBuffer()),
-                cMapUrl: '/cmaps/',
-                cMapPacked: true,
-            }).promise;
+            const doc = await loadPdfDocument(await fileRef.current.arrayBuffer());
             const pages: string[] = [];
             for (let i = 1; i <= doc.numPages; i++) {
                 if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
@@ -51,16 +53,32 @@ export default function PDFExtractText() {
     };
 
     const handleCopy = async () => {
-        await navigator.clipboard.writeText(text);
-        setCopied(true); setTimeout(() => setCopied(false), 2000);
+        try {
+            await navigator.clipboard.writeText(text);
+            setCopied(true);
+            if (copyResetTimeoutRef.current !== null) {
+                window.clearTimeout(copyResetTimeoutRef.current);
+            }
+            copyResetTimeoutRef.current = window.setTimeout(() => {
+                setCopied(false);
+                copyResetTimeoutRef.current = null;
+            }, 2000);
+        } catch (e) {
+            console.error(e);
+            setErrorMsg('Copy failed. Your browser may not allow clipboard access here.');
+        }
     };
 
     const handleDownload = () => {
         const blob = new Blob([text], { type: 'text/plain' });
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
+        a.href = url;
         a.download = fileName.replace('.pdf', '.txt');
+        document.body.appendChild(a);
         a.click();
+        a.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
     };
 
     return (

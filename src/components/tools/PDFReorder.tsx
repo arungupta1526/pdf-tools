@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { isPdfFile, loadPdfDocument, mapConcurrent, renderPdfPageImage, revokeObjectUrl } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
 
@@ -24,40 +25,36 @@ export default function PDFReorder() {
     const isCancelledRef = useRef(false);
 
     const fileRef = useRef<File | null>(null);
+    const pageThumbUrlsRef = useRef<string[]>([]);
+
+    useEffect(() => {
+        pageThumbUrlsRef.current = pages.map((page) => page.thumb);
+    }, [pages]);
+    useEffect(() => () => pageThumbUrlsRef.current.forEach(revokeObjectUrl), []);
+    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     const handleFile = useCallback(async (file: File) => {
-        if (file.type !== 'application/pdf') { setErrorMsg('Please upload a PDF.'); return; }
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
         fileRef.current = file;
         setFileName(file.name);
         setErrorMsg('');
-        setDownloadUrl(null);
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
+        setPages((prev) => {
+            prev.forEach((page) => revokeObjectUrl(page.thumb));
+            return [];
+        });
         setStatus('loading');
 
         try {
-            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-            pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
-
-            const fileBytes = new Uint8Array(await file.arrayBuffer());
-            const pdfDoc = await pdfjs.getDocument({ 
-                data: fileBytes,
-                cMapUrl: '/cmaps/',
-                cMapPacked: true,
-            }).promise;
-            const totalPages = pdfDoc.numPages;
-
-            const thumbs: PageItem[] = [];
-            for (let i = 1; i <= totalPages; i++) {
-                const page = await pdfDoc.getPage(i);
-                const vp = page.getViewport({ scale: 0.5 });
-                const canvas = document.createElement('canvas');
-                canvas.width = vp.width;
-                canvas.height = vp.height;
-                const ctx = canvas.getContext('2d')!;
-                ctx.fillStyle = '#ffffff';
-                ctx.fillRect(0, 0, vp.width, vp.height);
-                await page.render({ canvasContext: ctx, viewport: vp } as Parameters<typeof page.render>[0]).promise;
-                thumbs.push({ pageNum: i, thumb: canvas.toDataURL('image/jpeg', 0.7) });
-            }
+            const pdfDoc = await loadPdfDocument(await file.arrayBuffer());
+            const pageNumbers = Array.from({ length: pdfDoc.numPages }, (_, index) => index + 1);
+            const thumbs = await mapConcurrent(pageNumbers, 3, async (pageNum) => ({
+                pageNum,
+                thumb: await renderPdfPageImage(pdfDoc, pageNum, { scale: 0.5, quality: 0.7 }),
+            }));
 
             setPages(thumbs);
             setStatus('ready');
@@ -82,23 +79,35 @@ export default function PDFReorder() {
         }
         setDragIdx(null);
         setDragOverIdx(null);
-        setDownloadUrl(null);
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
     };
 
     const moveUp = (i: number) => {
         if (i === 0) return;
         setPages(prev => { const n = [...prev];[n[i - 1], n[i]] = [n[i], n[i - 1]]; return n; });
-        setDownloadUrl(null);
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
     };
     const moveDown = (i: number) => {
         if (i === pages.length - 1) return;
         setPages(prev => { const n = [...prev];[n[i], n[i + 1]] = [n[i + 1], n[i]]; return n; });
-        setDownloadUrl(null);
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
     };
 
     const reset = () => {
         setPages(prev => [...prev].sort((a, b) => a.pageNum - b.pageNum));
-        setDownloadUrl(null);
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
     };
 
     const handleProcess = async () => {
@@ -120,7 +129,10 @@ export default function PDFReorder() {
             if (isCancelledRef.current) { setStatus('ready'); return; }
             const outBytes = await outDoc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
-            setDownloadUrl(URL.createObjectURL(blob));
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(blob);
+            });
             setStatus('done');
         } catch (e) {
             console.error(e);

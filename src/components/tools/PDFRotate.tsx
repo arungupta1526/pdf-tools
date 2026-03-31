@@ -1,17 +1,15 @@
 'use client';
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { isPdfFile, loadPdfDocument, mapConcurrent, renderPdfPageImage, revokeObjectUrl } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
 
 interface PageItem { pageNum: number; url: string; rotation: number; }
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type PdfjsDoc = any;
 
 export default function PDFRotate() {
     const [status, setStatus] = useState<Status>('idle');
@@ -22,35 +20,40 @@ export default function PDFRotate() {
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const isCancelledRef = useRef(false);
     const fileRef = useRef<File | null>(null);
-    const pdfjsDocRef = useRef<PdfjsDoc>(null);
+    const pageUrlsRef = useRef<string[]>([]);
+
+    useEffect(() => {
+        pageUrlsRef.current = pages.map((page) => page.url);
+    }, [pages]);
+    useEffect(() => () => pageUrlsRef.current.forEach(revokeObjectUrl), []);
+    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     const loadThumbs = useCallback(async (file: File) => {
-        setStatus('loading'); setPages([]);
+        setStatus('loading');
+        setPages((prev) => {
+            prev.forEach((page) => revokeObjectUrl(page.url));
+            return [];
+        });
         try {
-            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-            pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString();
-            const doc = await pdfjs.getDocument({ 
-                data: new Uint8Array(await file.arrayBuffer()),
-                cMapUrl: '/cmaps/',
-                cMapPacked: true,
-            }).promise;
-            pdfjsDocRef.current = doc;
-            const results: PageItem[] = [];
-            for (let i = 1; i <= doc.numPages; i++) {
-                const page = await doc.getPage(i);
-                const viewport = page.getViewport({ scale: 0.35 });
-                const canvas = document.createElement('canvas');
-                canvas.width = viewport.width; canvas.height = viewport.height;
-                await page.render({ canvasContext: canvas.getContext('2d')!, viewport } as Parameters<typeof page.render>[0]).promise;
-                results.push({ pageNum: i, url: canvas.toDataURL('image/jpeg', 0.6), rotation: 0 });
-            }
+            const doc = await loadPdfDocument(await file.arrayBuffer());
+            const pageNumbers = Array.from({ length: doc.numPages }, (_, index) => index + 1);
+            const results = await mapConcurrent(pageNumbers, 3, async (pageNum) => ({
+                pageNum,
+                url: await renderPdfPageImage(doc, pageNum, { scale: 0.35, quality: 0.6 }),
+                rotation: 0,
+            }));
             setPages(results); setStatus('ready');
         } catch (e) { console.error(e); setErrorMsg('Failed to load PDF.'); setStatus('error'); }
     }, []);
 
     const handleFile = (file: File) => {
-        if (file.type !== 'application/pdf') { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file; setFileName(file.name); setErrorMsg(''); loadThumbs(file);
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
+        fileRef.current = file; setFileName(file.name); setErrorMsg('');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
+        loadThumbs(file);
     };
 
     const rotatePage = (n: number, deg: number) =>
@@ -77,7 +80,10 @@ export default function PDFRotate() {
             if (isCancelledRef.current) { setStatus('ready'); return; }
             const outBytes = await doc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
-            setDownloadUrl(URL.createObjectURL(blob));
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(blob);
+            });
             setStatus('done');
         } catch (e) { console.error(e); setErrorMsg('Rotation failed.'); setStatus('ready'); }
     };

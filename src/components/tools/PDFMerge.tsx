@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
+import { isPdfFile, revokeObjectUrl } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -20,25 +21,45 @@ export default function PDFMerge() {
     const dragItem = useRef<number | null>(null);
     const dragOverItem = useRef<number | null>(null);
 
+    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
+
     const addFiles = (files: FileList | File[]) => {
-        const pdfs = Array.from(files).filter(f => f.type === 'application/pdf');
+        const pdfs = Array.from(files).filter(isPdfFile);
         if (pdfs.length === 0) { setErrorMsg('Please upload PDF files.'); return; }
         setItems(prev => [...prev, ...pdfs.map(f => ({ id: crypto.randomUUID(), file: f, name: f.name }))]);
-        setErrorMsg(''); setStatus('idle'); setDownloadUrl(null);
+        setErrorMsg(''); setStatus('idle');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
     };
 
-    const removeItem = (id: string) => setItems(prev => prev.filter(i => i.id !== id));
+    const removeItem = (id: string) => {
+        setItems(prev => prev.filter(i => i.id !== id));
+        setStatus('idle');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
+    };
 
     // Drag-to-reorder
     const handleDragStart = (idx: number) => { dragItem.current = idx; };
     const handleDragEnter = (idx: number) => { dragOverItem.current = idx; };
     const handleDragEnd = () => {
-        if (dragItem.current === null || dragOverItem.current === null) return;
-        const updated = [...items];
-        const dragged = updated.splice(dragItem.current, 1)[0];
-        updated.splice(dragOverItem.current, 0, dragged);
-        setItems(updated);
-        dragItem.current = null; dragOverItem.current = null;
+        if (dragItem.current !== null && dragOverItem.current !== null && dragItem.current !== dragOverItem.current) {
+            const updated = [...items];
+            const dragged = updated.splice(dragItem.current, 1)[0];
+            updated.splice(dragOverItem.current, 0, dragged);
+            setItems(updated);
+            setStatus('idle');
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return null;
+            });
+        }
+        dragItem.current = null;
+        dragOverItem.current = null;
     };
 
     const handleMerge = useCallback(async () => {
@@ -60,7 +81,10 @@ export default function PDFMerge() {
             if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
             const outBytes = await outDoc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
-            setDownloadUrl(URL.createObjectURL(blob));
+            setDownloadUrl((prev) => {
+                revokeObjectUrl(prev);
+                return URL.createObjectURL(blob);
+            });
             setProgress(''); setStatus('done');
         } catch (e) { console.error(e); setErrorMsg('Merge failed.'); setStatus('error'); }
     }, [items]);
