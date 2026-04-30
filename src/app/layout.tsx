@@ -19,6 +19,9 @@ export const metadata: Metadata = {
     "Local PDF Processing",
   ],
   authors: [{ name: "Arun Gupta" }],
+  icons: {
+    icon: "/favicon.png",
+  },
   openGraph: {
     title: "PDF Tools - All-in-one PDF Utility",
     description: "100% Secure & Local PDF tools in your browser.",

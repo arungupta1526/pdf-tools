@@ -27,6 +27,7 @@ export default function PDFSplit() {
     const [progress, setProgress] = useState('');
     const [thumbs, setThumbs] = useState<PageThumb[]>([]);
     const [totalPages, setTotalPages] = useState(0);
+    const [showPreviews, setShowPreviews] = useState(false);
     const [splitMode, setSplitMode] = useState<SplitMode>('select');
     const [rangeInput, setRangeInput] = useState('');
     const [outputFormat, setOutputFormat] = useState<OutputFormat>('pdf-merged');
@@ -44,7 +45,7 @@ export default function PDFSplit() {
     useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     // ── Load page thumbnails ───────────────────────────────────────────────
-    const loadThumbs = useCallback(async (file: File) => {
+    const loadThumbs = useCallback(async (file: File, previews: boolean, currentThumbs: PageThumb[] = []) => {
         setStatus('loading');
         setThumbs((prev) => {
             prev.forEach((thumb) => revokeObjectUrl(thumb.url));
@@ -61,16 +62,23 @@ export default function PDFSplit() {
             const pageNumbers = Array.from({ length: doc.numPages }, (_, index) => index + 1);
             const results = await mapConcurrent(pageNumbers, 3, async (pageNum) => ({
                 pageNum,
-                url: await renderPdfPageImage(doc, pageNum, { scale: 0.4, quality: 0.7 }),
-                selected: true,
+                url: (previews || pageNum === 1) ? await renderPdfPageImage(doc, pageNum, { scale: 0.4, quality: 0.7 }) : '',
+                selected: currentThumbs.length > 0 ? currentThumbs[pageNum - 1]?.selected ?? true : true,
             }));
             setThumbs(results); setStatus('ready');
         } catch (e) { console.error(e); setErrorMsg('Failed to load PDF.'); setStatus('error'); }
     }, []);
 
+    useEffect(() => {
+        if (fileRef.current && status !== 'idle' && status !== 'loading') {
+            loadThumbs(fileRef.current, showPreviews, thumbs);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [showPreviews]);
+
     const handleFile = (file: File) => {
         if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file; setFileName(file.name); setErrorMsg(''); loadThumbs(file);
+        fileRef.current = file; setFileName(file.name); setErrorMsg(''); loadThumbs(file, showPreviews);
     };
 
     const togglePage = (n: number) => setThumbs(prev => prev.map(t => t.pageNum === n ? { ...t, selected: !t.selected } : t));
@@ -277,16 +285,29 @@ export default function PDFSplit() {
                 {/* Page thumbnails grid */}
                 {thumbs.length > 0 && splitMode === 'select' && (
                     <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5">
-                        <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-4">
-                            Pages — click to toggle
-                        </p>
+                        <div className="flex items-center justify-between mb-4">
+                            <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">
+                                Pages — click to toggle
+                            </p>
+                            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                                <input type="checkbox" checked={showPreviews} onChange={(e) => setShowPreviews(e.target.checked)} className="rounded border-gray-600 bg-gray-800 text-indigo-600 focus:ring-indigo-500" />
+                                Show all page previews
+                            </label>
+                        </div>
                         <div className="grid grid-cols-4 sm:grid-cols-6 gap-3">
                             {thumbs.map(t => (
                                 <button key={t.pageNum} onClick={() => togglePage(t.pageNum)}
                                     className={`relative rounded-lg overflow-hidden border-2 transition-all hover:scale-105 ${t.selected ? 'border-indigo-500 shadow-md shadow-indigo-500/20' : 'border-gray-700 opacity-40'
                                         }`}>
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img src={t.url} alt={`Page ${t.pageNum}`} className="w-full block" />
+                                    {t.url ? (
+                                        /* eslint-disable-next-line @next/next/no-img-element */
+                                        <img src={t.url} alt={`Page ${t.pageNum}`} className="w-full block" />
+                                    ) : (
+                                        <div className="w-full aspect-[1/1.4] bg-gray-800 flex flex-col items-center justify-center text-gray-500">
+                                            <span className="text-xs">Page</span>
+                                            <span className="text-xl font-bold">{t.pageNum}</span>
+                                        </div>
+                                    )}
                                     <div className={`absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${t.selected ? 'bg-indigo-500 text-white' : 'bg-gray-700 text-gray-400'
                                         }`}>{t.selected ? '✓' : ''}</div>
                                     <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-center text-[10px] text-gray-300 py-0.5">

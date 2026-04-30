@@ -18,6 +18,7 @@ export default function PDFReorder() {
     const [status, setStatus] = useState<Status>('idle');
     const [fileName, setFileName] = useState('');
     const [errorMsg, setErrorMsg] = useState('');
+    const [showPreviews, setShowPreviews] = useState(false);
     const [pages, setPages] = useState<PageItem[]>([]);
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [dragIdx, setDragIdx] = useState<number | null>(null);
@@ -33,27 +34,23 @@ export default function PDFReorder() {
     useEffect(() => () => pageThumbUrlsRef.current.forEach(revokeObjectUrl), []);
     useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
-    const handleFile = useCallback(async (file: File) => {
-        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file;
-        setFileName(file.name);
-        setErrorMsg('');
-        setDownloadUrl((prev) => {
-            revokeObjectUrl(prev);
-            return null;
-        });
+    const loadThumbs = useCallback(async (file: File, previews: boolean, currentPages: PageItem[] = []) => {
+        setStatus('loading');
         setPages((prev) => {
             prev.forEach((page) => revokeObjectUrl(page.thumb));
             return [];
         });
-        setStatus('loading');
 
         try {
             const pdfDoc = await loadPdfDocument(await file.arrayBuffer());
             const pageNumbers = Array.from({ length: pdfDoc.numPages }, (_, index) => index + 1);
-            const thumbs = await mapConcurrent(pageNumbers, 3, async (pageNum) => ({
+            
+            // Map the current page order if it exists
+            const orderMap = currentPages.length > 0 ? currentPages.map(p => p.pageNum) : pageNumbers;
+
+            const thumbs = await mapConcurrent(orderMap, 3, async (pageNum) => ({
                 pageNum,
-                thumb: await renderPdfPageImage(pdfDoc, pageNum, { scale: 0.5, quality: 0.7 }),
+                thumb: (previews || pageNum === 1) ? await renderPdfPageImage(pdfDoc, pageNum, { scale: 0.5, quality: 0.7 }) : '',
             }));
 
             setPages(thumbs);
@@ -64,6 +61,25 @@ export default function PDFReorder() {
             setStatus('error');
         }
     }, []);
+
+    useEffect(() => {
+        if (fileRef.current && status !== 'idle' && status !== 'loading') {
+            loadThumbs(fileRef.current, showPreviews, pages);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [showPreviews]);
+
+    const handleFile = useCallback((file: File) => {
+        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
+        fileRef.current = file;
+        setFileName(file.name);
+        setErrorMsg('');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
+        loadThumbs(file, showPreviews);
+    }, [loadThumbs, showPreviews]);
 
     // Drag handlers
     const onDragStart = (i: number) => setDragIdx(i);
@@ -162,13 +178,19 @@ export default function PDFReorder() {
 
                     {(status === 'ready' || status === 'processing' || status === 'done') && pages.length > 0 && (
                         <>
-                            <div className="flex items-center justify-between">
-                                <p className="text-sm text-gray-400">
-                                    <span className="text-white font-semibold">{pages.length}</span> pages · drag to reorder
-                                </p>
-                                <button onClick={reset} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
-                                    ↺ Reset order
-                                </button>
+                            <div className="flex items-center justify-between mb-4">
+                                <div className="flex items-center gap-4">
+                                    <p className="text-sm text-gray-400">
+                                        <span className="text-white font-semibold">{pages.length}</span> pages · drag to reorder
+                                    </p>
+                                    <button onClick={reset} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
+                                        ↺ Reset order
+                                    </button>
+                                </div>
+                                <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                                    <input type="checkbox" checked={showPreviews} onChange={(e) => setShowPreviews(e.target.checked)} className="rounded border-gray-600 bg-gray-800 text-indigo-600 focus:ring-indigo-500" />
+                                    Show all page previews
+                                </label>
                             </div>
 
                             {/* Thumbnail Grid */}
@@ -186,9 +208,16 @@ export default function PDFReorder() {
                       ${dragOverIdx === i && dragIdx !== i ? 'border-indigo-500 scale-105 shadow-lg shadow-indigo-500/20' : 'border-gray-700/50 hover:border-gray-500/50'}
                     `}
                                     >
-                                        <div className="bg-white aspect-[3/4] overflow-hidden">
-                                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                                            <img src={page.thumb} alt={`Page ${page.pageNum}`} className="w-full h-full object-cover" />
+                                        <div className="bg-gray-800 aspect-[3/4] overflow-hidden flex items-center justify-center">
+                                            {page.thumb ? (
+                                                /* eslint-disable-next-line @next/next/no-img-element */
+                                                <img src={page.thumb} alt={`Page ${page.pageNum}`} className="w-full h-full object-cover bg-white" />
+                                            ) : (
+                                                <div className="flex flex-col items-center justify-center text-gray-500">
+                                                    <span className="text-xs">Page</span>
+                                                    <span className="text-2xl font-bold">{page.pageNum}</span>
+                                                </div>
+                                            )}
                                         </div>
                                         <div className="bg-gray-800 px-1.5 py-1 flex items-center justify-between">
                                             <span className="text-[10px] text-gray-400">{i + 1}</span>

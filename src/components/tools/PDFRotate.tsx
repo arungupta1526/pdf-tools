@@ -15,6 +15,7 @@ export default function PDFRotate() {
     const [status, setStatus] = useState<Status>('idle');
     const [fileName, setFileName] = useState('');
     const [errorMsg, setErrorMsg] = useState('');
+    const [showPreviews, setShowPreviews] = useState(false);
     const [pages, setPages] = useState<PageItem[]>([]);
     const [globalRotation, setGlobalRotation] = useState(0);
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
@@ -28,7 +29,7 @@ export default function PDFRotate() {
     useEffect(() => () => pageUrlsRef.current.forEach(revokeObjectUrl), []);
     useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
-    const loadThumbs = useCallback(async (file: File) => {
+    const loadThumbs = useCallback(async (file: File, previews: boolean, currentPages: PageItem[] = []) => {
         setStatus('loading');
         setPages((prev) => {
             prev.forEach((page) => revokeObjectUrl(page.url));
@@ -39,12 +40,19 @@ export default function PDFRotate() {
             const pageNumbers = Array.from({ length: doc.numPages }, (_, index) => index + 1);
             const results = await mapConcurrent(pageNumbers, 3, async (pageNum) => ({
                 pageNum,
-                url: await renderPdfPageImage(doc, pageNum, { scale: 0.35, quality: 0.6 }),
-                rotation: 0,
+                url: (previews || pageNum === 1) ? await renderPdfPageImage(doc, pageNum, { scale: 0.35, quality: 0.6 }) : '',
+                rotation: currentPages.length > 0 ? currentPages[pageNum - 1]?.rotation ?? 0 : 0,
             }));
             setPages(results); setStatus('ready');
         } catch (e) { console.error(e); setErrorMsg('Failed to load PDF.'); setStatus('error'); }
     }, []);
+
+    useEffect(() => {
+        if (fileRef.current && status !== 'idle' && status !== 'loading') {
+            loadThumbs(fileRef.current, showPreviews, pages);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [showPreviews]);
 
     const handleFile = (file: File) => {
         if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
@@ -53,7 +61,7 @@ export default function PDFRotate() {
             revokeObjectUrl(prev);
             return null;
         });
-        loadThumbs(file);
+        loadThumbs(file, showPreviews);
     };
 
     const rotatePage = (n: number, deg: number) =>
@@ -133,14 +141,27 @@ export default function PDFRotate() {
                 </div>
                 {pages.length > 0 && (
                     <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5">
-                        <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-4">Individual Pages (click ↻/↺ to rotate)</p>
+                        <div className="flex items-center justify-between mb-4">
+                            <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Individual Pages (click ↻/↺ to rotate)</p>
+                            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                                <input type="checkbox" checked={showPreviews} onChange={(e) => setShowPreviews(e.target.checked)} className="rounded border-gray-600 bg-gray-800 text-indigo-600 focus:ring-indigo-500" />
+                                Show all page previews
+                            </label>
+                        </div>
                         <div className="grid grid-cols-3 sm:grid-cols-5 gap-4">
                             {pages.map(p => (
                                 <div key={p.pageNum} className="flex flex-col items-center gap-2">
-                                    <div className="relative rounded-lg overflow-hidden border border-gray-700 w-full">
-                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                        <img src={p.url} alt={`Page ${p.pageNum}`} className="w-full block transition-all"
-                                            style={{ transform: `rotate(${p.rotation}deg)` }} />
+                                    <div className="relative rounded-lg overflow-hidden border border-gray-700 w-full bg-gray-800 aspect-[1/1.4] flex items-center justify-center">
+                                        {p.url ? (
+                                            /* eslint-disable-next-line @next/next/no-img-element */
+                                            <img src={p.url} alt={`Page ${p.pageNum}`} className="w-full block transition-all"
+                                                style={{ transform: `rotate(${p.rotation}deg)` }} />
+                                        ) : (
+                                            <div className="flex flex-col items-center justify-center text-gray-500 transition-all" style={{ transform: `rotate(${p.rotation}deg)` }}>
+                                                <span className="text-xs">Page</span>
+                                                <span className="text-xl font-bold">{p.pageNum}</span>
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="flex items-center gap-1">
                                         <button onClick={() => rotatePage(p.pageNum, -90)} className="w-6 h-6 rounded bg-gray-800 hover:bg-gray-700 text-xs flex items-center justify-center transition-colors">↺</button>
