@@ -4,11 +4,24 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
-import { isPdfFile, revokeObjectUrl } from '@/lib/pdf-browser';
+import { isPdfFile, revokeObjectUrl, loadPdfDocument } from '@/lib/pdf-browser';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
-interface PDFItem { id: string; file: File; name: string; }
+interface PDFItem { id: string; file: File; name: string; pageRange: string; totalPages?: number; }
+
+const parseRange = (input: string, max: number): number[] => {
+    if (!input || !input.trim()) return Array.from({ length: max }, (_, i) => i);
+    const pages = new Set<number>();
+    input.split(',').forEach(part => {
+        const m = part.trim().match(/^(\d+)(?:-(\d+))?$/);
+        if (m) {
+            const start = parseInt(m[1]), end = m[2] ? parseInt(m[2]) : start;
+            for (let i = Math.max(1, start); i <= Math.min(max, end); i++) pages.add(i - 1); // 0-indexed for pdf-lib
+        }
+    });
+    return [...pages].sort((a, b) => a - b);
+};
 
 export default function PDFMerge() {
     const [items, setItems] = useState<PDFItem[]>([]);
@@ -23,11 +36,27 @@ export default function PDFMerge() {
 
     useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
-    const addFiles = (files: FileList | File[]) => {
+    const addFiles = async (files: FileList | File[]) => {
         const pdfs = Array.from(files).filter(isPdfFile);
         if (pdfs.length === 0) { setErrorMsg('Please upload PDF files.'); return; }
-        setItems(prev => [...prev, ...pdfs.map(f => ({ id: crypto.randomUUID(), file: f, name: f.name }))]);
-        setErrorMsg(''); setStatus('idle');
+        
+        setStatus('processing');
+        setProgress('Loading PDFs…');
+
+        const newItems: PDFItem[] = [];
+        for (const f of pdfs) {
+            let totalPages: number | undefined;
+            try {
+                const doc = await loadPdfDocument(await f.arrayBuffer());
+                totalPages = doc.numPages;
+            } catch (e) {
+                console.error('Error loading PDF pages:', e);
+            }
+            newItems.push({ id: crypto.randomUUID(), file: f, name: f.name, pageRange: '', totalPages });
+        }
+
+        setItems(prev => [...prev, ...newItems]);
+        setErrorMsg(''); setStatus('idle'); setProgress('');
         setDownloadUrl((prev) => {
             revokeObjectUrl(prev);
             return null;
@@ -36,6 +65,15 @@ export default function PDFMerge() {
 
     const removeItem = (id: string) => {
         setItems(prev => prev.filter(i => i.id !== id));
+        setStatus('idle');
+        setDownloadUrl((prev) => {
+            revokeObjectUrl(prev);
+            return null;
+        });
+    };
+
+    const updateItemRange = (id: string, range: string) => {
+        setItems(prev => prev.map(i => i.id === id ? { ...i, pageRange: range } : i));
         setStatus('idle');
         setDownloadUrl((prev) => {
             revokeObjectUrl(prev);
@@ -74,7 +112,9 @@ export default function PDFMerge() {
                 setProgress(`Merging ${i + 1}/${items.length}: ${items[i].name}`);
                 const bytes = await items[i].file.arrayBuffer();
                 const doc = await PDFDocument.load(bytes);
-                const pages = await outDoc.copyPages(doc, doc.getPageIndices());
+                const pageIndicesToCopy = parseRange(items[i].pageRange, doc.getPageCount());
+                if (pageIndicesToCopy.length === 0) continue;
+                const pages = await outDoc.copyPages(doc, pageIndicesToCopy);
                 pages.forEach(p => outDoc.addPage(p));
             }
             setProgress('Saving…');
@@ -129,9 +169,25 @@ export default function PDFMerge() {
                                 >
                                     <span className="text-gray-500 select-none text-lg">⠿</span>
                                     <span className="w-6 h-6 rounded-lg bg-indigo-600 text-xs font-bold flex items-center justify-center shrink-0">{idx + 1}</span>
-                                    <span className="flex-1 text-sm text-gray-200 truncate">{item.name}</span>
-                                    <span className="text-xs text-gray-500">{(item.file.size / 1024).toFixed(0)} KB</span>
-                                    <button onClick={() => removeItem(item.id)} className="text-gray-500 hover:text-red-400 transition-colors text-lg leading-none">×</button>
+                                    <div className="flex-1 flex flex-col max-w-[50%]">
+                                        <span className="text-sm text-gray-200 truncate">{item.name}</span>
+                                        <span className="text-xs text-gray-500">
+                                            {(item.file.size / 1024).toFixed(0)} KB
+                                            {item.totalPages !== undefined ? ` • ${item.totalPages} page${item.totalPages !== 1 ? 's' : ''}` : ''}
+                                        </span>
+                                    </div>
+                                    <input 
+                                        type="text" 
+                                        placeholder="Pages (e.g. 1-3, 5 or all)" 
+                                        value={item.pageRange}
+                                        onChange={(e) => updateItemRange(item.id, e.target.value)}
+                                        className="w-40 md:w-48 bg-gray-900 border border-gray-600 rounded-lg px-3 py-1.5 text-xs text-white placeholder-gray-500 outline-none focus:ring-1 focus:ring-indigo-500 shrink-0"
+                                        onClick={(e) => e.stopPropagation()}
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                        draggable={true}
+                                    />
+                                    <button onClick={() => removeItem(item.id)} className="text-gray-500 hover:text-red-400 transition-colors text-lg leading-none shrink-0">×</button>
                                 </div>
                             ))}
                         </div>
