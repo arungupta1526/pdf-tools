@@ -6,11 +6,7 @@ import ProcessingButton from "@/components/ProcessingButton";
 import ToolHeader from "@/components/ToolHeader";
 import ToolHero from "@/components/ToolHero";
 import {
-  canvasToBlob,
   isPdfFile,
-  loadPdfDocument,
-  mapConcurrent,
-  renderPdfPageToCanvas,
   revokeObjectUrl,
 } from "@/lib/pdf-browser";
 
@@ -95,12 +91,32 @@ export default function PDFNup() {
     try {
       const { PDFDocument, rgb } = await import("pdf-lib");
 
-      // Load source with pdfjs for rendering
-      const srcDoc = await loadPdfDocument(await fileRef.current.arrayBuffer());
-      const totalPages = srcDoc.numPages;
+      const fileBytes = await fileRef.current.arrayBuffer();
+      // Load source directly with pdf-lib to retain vector quality
+      const srcDoc = await PDFDocument.load(fileBytes);
+      const totalPages = srcDoc.getPageCount();
+
+      if (isCancelledRef.current) {
+        setStatus("idle");
+        setProgress("");
+        return;
+      }
 
       // Create output PDF
       const outDoc = await PDFDocument.create();
+
+      setProgress("Preparing pages...");
+      // For responsiveness, allow UI to update
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const srcPages = srcDoc.getPages();
+      const embeddedPages = await outDoc.embedPages(srcPages);
+
+      if (isCancelledRef.current) {
+        setStatus("idle");
+        setProgress("");
+        return;
+      }
 
       const cols = effectiveCols;
       const rows = effectiveRows;
@@ -151,45 +167,28 @@ export default function PDFNup() {
         setProgress(`Sheet ${sheet + 1}/${totalSheets}…`);
         const outPage = outDoc.addPage([outW, outH]);
 
-        const sheetPageIndices = [];
         for (let slot = 0; slot < pagesPerSheet; slot++) {
           const pageIdx = sheet * pagesPerSheet + slot;
-          if (pageIdx < totalPages) sheetPageIndices.push({ pageIdx, slot });
-        }
-
-        const sheetResults = await mapConcurrent(
-          sheetPageIndices,
-          2,
-          async ({ pageIdx, slot }: { pageIdx: number; slot: number }) => {
-            if (isCancelledRef.current) throw new Error("CANCELLED");
-            const srcPage = await srcDoc.getPage(pageIdx + 1);
-            const vp = srcPage.getViewport({ scale: 1 });
-            const scale = Math.min(cellW / vp.width, cellH / vp.height);
-
-            const canvas = await renderPdfPageToCanvas(srcDoc, pageIdx + 1, {
-              scale: scale * 2,
-            });
-            const imgBytes = await (
-              await canvasToBlob(canvas, "image/jpeg", 0.88)
-            ).arrayBuffer();
-            return { imgBytes, slot, vp, scale };
-          },
-        );
-
-        for (const res of sheetResults) {
-          const img = await outDoc.embedJpg(res.imgBytes);
-          const row = Math.floor(res.slot / cols);
-          let col = res.slot % cols;
+          if (pageIdx >= totalPages) break;
+          
+          const embeddedPage = embeddedPages[pageIdx];
+          const srcPage = srcPages[pageIdx];
+          const { width: srcW, height: srcH } = srcPage.getSize();
+          
+          const scale = Math.min(cellW / srcW, cellH / srcH);
+          
+          const row = Math.floor(slot / cols);
+          let col = slot % cols;
           if (direction === "rtl") col = cols - 1 - col;
 
-          const drawW = res.vp.width * res.scale;
-          const drawH = res.vp.height * res.scale;
+          const drawW = srcW * scale;
+          const drawH = srcH * scale;
           const cellX = ml + col * (cellW + im);
           const cellY = outH - mt - (row + 1) * cellH - row * im;
           const offsetX = (cellW - drawW) / 2;
           const offsetY = (cellH - drawH) / 2;
 
-          outPage.drawImage(img, {
+          outPage.drawPage(embeddedPage, {
             x: cellX + offsetX,
             y: cellY + offsetY,
             width: drawW,
@@ -393,9 +392,35 @@ export default function PDFNup() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Outer Margins */}
                 <div className="bg-gray-800/30 p-3 rounded-xl border border-gray-700/50">
-                  <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider block mb-3">
-                    Outer Margins (mm)
-                  </label>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider block">
+                      Outer Margins (mm)
+                    </label>
+                  </div>
+                  <div className="mb-3 border-b border-gray-700/50 pb-3">
+                    <input
+                      type="range"
+                      min={0}
+                      max={50}
+                      step={1}
+                      value={
+                        marginTop === marginBottom &&
+                        marginTop === marginLeft &&
+                        marginTop === marginRight
+                          ? marginTop
+                          : Math.max(marginTop, marginBottom, marginLeft, marginRight)
+                      }
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value);
+                        setMarginTop(val);
+                        setMarginBottom(val);
+                        setMarginLeft(val);
+                        setMarginRight(val);
+                      }}
+                      className="w-full accent-indigo-500"
+                      title="Adjust all outer margins simultaneously"
+                    />
+                  </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-gray-500 w-10 text-right">
