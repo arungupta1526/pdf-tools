@@ -3,8 +3,18 @@ name: Security & Docker Build
 on:
   push:
     branches: ["main"]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '.dockerignore'
+      - 'LICENSE'
   pull_request:
     branches: ["main"]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '.dockerignore'
+      - 'LICENSE'
 
 env:
   # Change this to your Docker Hub username if it is different
