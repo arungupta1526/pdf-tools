@@ -6,6 +6,7 @@ import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
 import { isPdfFile, loadPdfDocument } from '@/lib/pdf-browser';
+import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
@@ -43,8 +44,7 @@ export default function PDFExtractText() {
                 setProgress(`Extracting page ${i}/${doc.numPages}…`);
                 const page = await doc.getPage(i);
                 const content = await page.getTextContent();
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const pageText = content.items.map((item: any) => item.str).join(' ');
+                const pageText = content.items.map((item) => (item as TextItem).str).join(' ');
                 pages.push(`--- Page ${i} ---\n${pageText}`);
             }
             setText(pages.join('\n\n'));

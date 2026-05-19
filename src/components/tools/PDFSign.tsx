@@ -5,41 +5,37 @@ import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
-import { canvasToObjectUrl, isImageFile, isPdfFile, loadPdfDocument, renderPdfPageToCanvas, revokeObjectUrl, type PdfJsDocument } from '@/lib/pdf-browser';
-
-type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
-type SignMode = 'draw' | 'type' | 'upload';
+import PasswordPrompt from '@/components/PasswordPrompt';
+import SignaturePad from '@/components/SignaturePad';
+import { canvasToObjectUrl, loadPdfDocument, renderPdfPageToCanvas, revokeObjectUrl, type PdfJsDocument } from '@/lib/pdf-browser';
+import { usePdfTool } from '@/hooks/usePdfTool';
 
 const MM = 2.835; // mm to PDF points
 
 export default function PDFSign() {
-    const [status, setStatus] = useState<Status>('idle');
-    const [fileName, setFileName] = useState('');
-    const [errorMsg, setErrorMsg] = useState('');
-    const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-    const isCancelledRef = useRef(false);
+    const {
+        status, setStatus,
+        fileName,
+        errorMsg, setErrorMsg,
+        downloadUrl, setDownloadUrl,
+        password,
+        fileRef,
+        isCancelledRef,
+        handleFile,
+        handleCancel,
+        handlePasswordSubmit,
+        handleError
+    } = usePdfTool();
+
     const [pageCount, setPageCount] = useState(0);
     const [targetPage, setTargetPage] = useState(1);
-    const [pageThumb, setPageThumb] = useState<string | null>(null);   // data URL of current page render
-    const [pageThumbW, setPageThumbW] = useState(0);  // rendered canvas width (px)
-    const [pageThumbH, setPageThumbH] = useState(0);  // rendered canvas height (px)
-    const [pageRealW, setPageRealW] = useState(595);  // PDF page width in points
+    const [pageThumb, setPageThumb] = useState<string | null>(null);
+    const [pageThumbW, setPageThumbW] = useState(0);
+    const [pageThumbH, setPageThumbH] = useState(0);
+    const [pageRealW, setPageRealW] = useState(595);
 
-    // Signature mode
-    const [signMode, setSignMode] = useState<SignMode>('draw');
-    const [typedText, setTypedText] = useState('');
-    const [typedFont, setTypedFont] = useState<'cursive' | 'serif' | 'monospace'>('cursive');
-    const [sigColor, setSigColor] = useState('#1a1a2e');
-    const [sigThickness, setSigThickness] = useState(3);
-
-    // Canvas drawing
-    const sigCanvasRef = useRef<HTMLCanvasElement>(null);
-    const [isDrawing, setIsDrawing] = useState(false);
-    const [lastPos, setLastPos] = useState<{ x: number; y: number } | null>(null);
-    const [hasDrawn, setHasDrawn] = useState(false);
-    const [uploadedSig, setUploadedSig] = useState<string | null>(null);
-    const [isProcessing, setIsProcessing] = useState(false);
-    const sigImageInputRef = useRef<HTMLInputElement>(null);
+    // Signature data (from SignaturePad component)
+    const [sigDataUrl, setSigDataUrl] = useState<string | null>(null);
 
     // Placement (mm)
     const [sigX, setSigX] = useState(50);
@@ -48,11 +44,32 @@ export default function PDFSign() {
     const [isSelected, setIsSelected] = useState(false);
 
     const [dragInfo, setDragInfo] = useState<{ startX: number; startY: number; initialX: number; initialY: number; initialScrollY: number } | null>(null);
-
-    const fileRef = useRef<File | null>(null);
     const pdfJsDocRef = useRef<PdfJsDocument | null>(null);
 
     // ─── Load PDF & render first page thumbnail ───────────────────────────────
+    const loadPdfThumbnails = useCallback(async (file: File, pwd?: string) => {
+        setStatus('loading');
+        try {
+            const doc = await loadPdfDocument(await file.arrayBuffer(), pwd);
+            pdfJsDocRef.current = doc;
+            setPageCount(doc.numPages);
+            setTargetPage(1);
+            setStatus('ready');
+        } catch (e) {
+            handleError(e, 'Could not read the PDF.');
+        }
+    }, [setStatus, handleError]);
+
+    const onFileSelect = useCallback((file: File) => {
+        handleFile(file, (f) => loadPdfThumbnails(f));
+    }, [handleFile, loadPdfThumbnails]);
+
+    const onPasswordSubmit = useCallback((pwd: string) => {
+        handlePasswordSubmit(pwd, () => {
+            if (fileRef.current) loadPdfThumbnails(fileRef.current, pwd);
+        });
+    }, [handlePasswordSubmit, loadPdfThumbnails, fileRef]);
+
     const renderPageThumb = useCallback(async (pageNum: number) => {
         if (!pdfJsDocRef.current) return;
         try {
@@ -66,147 +83,53 @@ export default function PDFSign() {
             });
             setPageThumbW(vp.width);
             setPageThumbH(vp.height);
-            // Get real width at scale=1 for mm→px conversion
             const vp1 = page.getViewport({ scale: 1 });
             setPageRealW(vp1.width);
         } catch (e) { console.error(e); }
     }, []);
 
-    const handleFile = useCallback(async (file: File) => {
-        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file;
-        setFileName(file.name);
-        setErrorMsg('');
-        setDownloadUrl((prev) => {
-            revokeObjectUrl(prev);
-            return null;
-        });
-        setStatus('loading');
-
-        try {
-            const doc = await loadPdfDocument(await file.arrayBuffer());
-            pdfJsDocRef.current = doc;
-            setPageCount(doc.numPages);
-            setTargetPage(1);
-            await renderPageThumb(1);
-            setStatus('ready');
-        } catch (e) {
-            console.error(e);
-            setErrorMsg('Could not read the PDF.');
-            setStatus('error');
-        }
-    }, [renderPageThumb]);
-
-    // Re-render thumb when target page changes
     useEffect(() => {
         if (status === 'ready' || status === 'processing' || status === 'done') {
             renderPageThumb(targetPage);
         }
     }, [targetPage, renderPageThumb, status]);
     useEffect(() => () => revokeObjectUrl(pageThumb), [pageThumb]);
-    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
-    // ─── Canvas drawing helpers ───────────────────────────────────────────────
-    const getPos = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-        const canvas = sigCanvasRef.current!;
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        if ('touches' in e) {
-            return { x: (e.touches[0].clientX - rect.left) * scaleX, y: (e.touches[0].clientY - rect.top) * scaleY };
-        }
-        return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
-    };
-
-    const startDraw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-        e.preventDefault(); setIsDrawing(true); setLastPos(getPos(e)); setHasDrawn(true);
-    };
-    const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-        e.preventDefault();
-        if (!isDrawing || !sigCanvasRef.current) return;
-        const ctx = sigCanvasRef.current.getContext('2d')!;
-        const pos = getPos(e);
-        ctx.beginPath(); ctx.moveTo(lastPos!.x, lastPos!.y); ctx.lineTo(pos.x, pos.y);
-        ctx.strokeStyle = sigColor; ctx.lineWidth = sigThickness; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-        ctx.stroke(); setLastPos(pos);
-    };
-    const endDraw = () => setIsDrawing(false);
-    const clearCanvas = () => {
-        if (!sigCanvasRef.current) return;
-        sigCanvasRef.current.getContext('2d')!.clearRect(0, 0, 500, 300);
-        setHasDrawn(false);
-    };
-    useEffect(() => { clearCanvas(); }, [sigColor]);
-
-    // ─── Get signature as data URL ────────────────────────────────────────────
-    const getSignatureDataUrl = useCallback((): string | null => {
-        if (signMode === 'upload') {
-            return uploadedSig;
-        }
-        if (signMode === 'draw') {
-            if (!hasDrawn || !sigCanvasRef.current) return null;
-            return sigCanvasRef.current.toDataURL('image/png');
-        }
-        if (!typedText.trim()) return null;
-        const offscreen = document.createElement('canvas');
-        offscreen.width = 400; offscreen.height = 120;
-        const ctx = offscreen.getContext('2d')!;
-        ctx.font = `60px ${typedFont}`; ctx.fillStyle = sigColor;
-        ctx.textBaseline = 'middle'; ctx.fillText(typedText, 10, 60);
-        return offscreen.toDataURL('image/png');
-    }, [signMode, uploadedSig, hasDrawn, typedText, typedFont, sigColor]);
-
-    const processImageFile = useCallback((file: File) => {
-        if (!isImageFile(file)) return;
-        setIsProcessing(true);
-        const reader = new FileReader();
-        reader.onload = (re) => {
-            const img = new Image();
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                canvas.width = img.width; canvas.height = img.height;
-                const ctx = canvas.getContext('2d');
-                ctx?.drawImage(img, 0, 0);
-                setUploadedSig(canvas.toDataURL('image/png'));
-                setIsProcessing(false);
-            };
-            img.onerror = () => setIsProcessing(false);
-            img.src = re.target?.result as string;
-        };
-        reader.onerror = () => setIsProcessing(false);
-        reader.readAsDataURL(file);
-    }, []);
-
-    // ─── Live preview overlay computation ────────────────────────────────────
-    // Convert mm position → preview px position
-    // pageRealW/H are in PDF points. pageThumbW/H are the rendered canvas dims.
     const pxPerPoint = pageThumbW / pageRealW;
     const previewSigX = sigX * MM * pxPerPoint;
-    const previewSigY = sigY * MM * pxPerPoint; // top-down (Y from top of page)
+    const previewSigY = sigY * MM * pxPerPoint;
     const previewSigW = sigW * MM * pxPerPoint;
 
     // ─── Process PDF ────────────────────────────────────────────────────────
     const handleProcess = async () => {
         if (!fileRef.current) return;
-        const sigDataUrl = getSignatureDataUrl();
         if (!sigDataUrl) {
-            const msg = signMode === 'upload' ? 'Please upload your signature image.' : 'Please draw or type your signature first.';
-            setErrorMsg(msg);
+            setErrorMsg('Please draw, type, or upload your signature first.');
             return;
         }
-        setStatus('processing'); setErrorMsg('');
+        setStatus('processing');
+        setErrorMsg('');
         isCancelledRef.current = false;
 
         try {
             const { PDFDocument } = await import('pdf-lib');
             const fileBytes = new Uint8Array(await fileRef.current.arrayBuffer());
             if (isCancelledRef.current) { setStatus('ready'); return; }
-            const doc = await PDFDocument.load(fileBytes);
+
+            // Pass the password from usePdfTool so encrypted PDFs are handled correctly.
+            // pdf-lib's TypeScript types don't expose the password option, so we spread it via any.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const loadOptions: any = {};
+            if (password) {
+                loadOptions.password = password;
+            }
+            const doc = await PDFDocument.load(fileBytes, loadOptions);
+
             const page = doc.getPage(targetPage - 1);
             const { height: pageH } = page.getSize();
 
             const base64 = sigDataUrl.split(',')[1];
-            const imgBytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+            const imgBytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
             const img = await doc.embedPng(imgBytes);
             if (isCancelledRef.current) { setStatus('ready'); return; }
 
@@ -224,26 +147,18 @@ export default function PDFSign() {
             if (isCancelledRef.current) { setStatus('ready'); return; }
             const outBytes = await doc.save();
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
-            setDownloadUrl((prev) => {
-                revokeObjectUrl(prev);
-                return URL.createObjectURL(blob);
-            });
+            setDownloadUrl(URL.createObjectURL(blob));
             setStatus('done');
         } catch (e) {
-            console.error(e);
-            setErrorMsg('Failed to sign the PDF.');
-            setStatus('error');
+            handleError(e, 'Failed to sign the PDF.');
         }
     };
 
     const isActive = status === 'ready' || status === 'processing' || status === 'done';
-    const sigDataUrl = isActive ? getSignatureDataUrl() : null;
 
     // ─── Drag-to-move handlers ────────────────────────────────────────────────
     const handleMouseMove = useCallback((e: MouseEvent) => {
         if (!dragInfo) return;
-        
-        // Auto-scroll logic if dragging near viewport edges
         const threshold = 80;
         const speed = 10;
         if (e.clientY < threshold) window.scrollBy({ top: -speed, behavior: 'auto' });
@@ -251,7 +166,6 @@ export default function PDFSign() {
 
         const dx = (e.clientX - dragInfo.startX) / (MM * pxPerPoint);
         const dy = (e.clientY - dragInfo.startY + (window.scrollY - dragInfo.initialScrollY)) / (MM * pxPerPoint);
-        
         setSigX(Math.max(0, Math.round(dragInfo.initialX + dx)));
         setSigY(Math.max(0, Math.round(dragInfo.initialY + dy)));
     }, [dragInfo, pxPerPoint]);
@@ -275,128 +189,28 @@ export default function PDFSign() {
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">
             <ToolHeader icon="✍️" title="Sign PDF" />
             <div className="flex-1 p-6 max-w-5xl mx-auto w-full flex flex-col gap-5">
-                <ToolHero 
-                    icon="✍️" 
-                    title="PDF Sign" 
-                    description="Add your signature or images to PDF documents interactively." 
+                <ToolHero
+                    icon="✍️"
+                    title="PDF Sign"
+                    description="Add your signature or images to PDF documents interactively."
                 />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-5">
-                    <DropZone onFile={handleFile} fileName={fileName} />
+                    <DropZone onFile={onFileSelect} fileName={fileName} />
+
+                    {status === 'needs_password' && (
+                        <PasswordPrompt
+                            onSubmit={onPasswordSubmit}
+                            onCancel={() => setStatus('idle')}
+                            errorMsg={errorMsg}
+                        />
+                    )}
 
                     {isActive && (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             {/* Left: settings */}
                             <div className="flex flex-col gap-4">
-                                {/* Mode */}
-                                <div>
-                                    <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider block mb-2">Signature Mode</label>
-                                    <div className="flex gap-2">
-                                        {(['draw', 'type', 'upload'] as const).map(m => (
-                                            <button key={m} onClick={() => setSignMode(m)}
-                                                className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${signMode === m ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
-                                                {m === 'draw' ? '✏️ Draw' : m === 'type' ? '⌨️ Type' : '📁 Upload'}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                {/* Ink color */}
-                                <div className="flex items-center gap-3 flex-wrap">
-                                    <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Ink Color</label>
-                                    {['#1a1a2e', '#0a3d62', '#000000', '#1a4731', '#4a0000'].map(c => (
-                                        <button key={c} onClick={() => setSigColor(c)}
-                                            className={`w-7 h-7 rounded-full border-2 transition-all ${sigColor === c ? 'border-white scale-110' : 'border-transparent'}`}
-                                            style={{ backgroundColor: c }} />
-                                    ))}
-                                    <input type="color" value={sigColor} onChange={e => setSigColor(e.target.value)}
-                                        className="w-7 h-7 rounded-full cursor-pointer border-0 bg-transparent" title="Custom" />
-                                </div>
-                                
-                                {/* Signature Thickness */}
-                                <div>
-                                    <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider block mb-2">Pen Thickness: {sigThickness}px</label>
-                                    <input type="range" min={1} max={10} step={0.5} value={sigThickness} onChange={e => setSigThickness(+e.target.value)}
-                                        className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500" />
-                                </div>
-
-                                {/* Draw / Type panel */}
-                                {signMode === 'draw' ? (
-                                    <div>
-                                        <div className="flex items-center justify-between mb-2">
-                                            <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Draw Signature</label>
-                                            <button onClick={clearCanvas} className="text-xs text-gray-500 hover:text-gray-300 transition-colors">✕ Clear</button>
-                                        </div>
-                                        <canvas ref={sigCanvasRef} width={500} height={300}
-                                            onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
-                                            onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
-                                            className="w-full rounded-xl border-2 border-dashed border-gray-600 bg-white cursor-crosshair touch-none"
-                                            style={{ aspectRatio: '500/300' }} />
-                                        {!hasDrawn && <p className="text-xs text-gray-600 text-center mt-1">Draw your signature above</p>}
-                                    </div>
-                                ) : signMode === 'type' ? (
-                                    <div className="flex flex-col gap-3">
-                                        <input type="text" value={typedText || ''} onChange={e => setTypedText(e.target.value)}
-                                            placeholder="Your name…"
-                                            className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-600 focus:border-indigo-500 focus:outline-none" />
-                                        <div className="flex gap-2">
-                                            {(['cursive', 'serif', 'monospace'] as const).map(f => (
-                                                <button key={f} onClick={() => setTypedFont(f)}
-                                                    className={`flex-1 py-2 rounded-lg text-sm transition-all ${typedFont === f ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
-                                                    style={{ fontFamily: f }}>
-                                                    {f === 'cursive' ? 'Script' : f === 'monospace' ? 'Mono' : 'Serif'}
-                                                </button>
-                                            ))}
-                                        </div>
-                                        {typedText && (
-                                            <div className="bg-white rounded-xl p-3 flex items-center justify-center min-h-[60px]">
-                                                <span style={{ fontFamily: typedFont, color: sigColor, fontSize: 32 }}>{typedText}</span>
-                                            </div>
-                                        )}
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-col gap-3">
-                                        <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Upload Signature Image</label>
-                                        <input type="file" ref={sigImageInputRef} className="hidden" accept="image/*"
-                                            onChange={e => {
-                                                const f = e.target.files?.[0];
-                                                if (f) processImageFile(f);
-                                            }} />
-                                        <button 
-                                            onClick={() => sigImageInputRef.current?.click()}
-                                            onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
-                                            onDrop={e => {
-                                                e.preventDefault(); e.stopPropagation();
-                                                const f = e.dataTransfer.files?.[0];
-                                                if (f) processImageFile(f);
-                                            }}
-                                            className={`w-full py-6 rounded-xl border-2 border-dashed transition-all flex flex-col items-center gap-3 group relative overflow-hidden ${
-                                                uploadedSig ? 'border-indigo-500/30 bg-indigo-500/5' : 'border-gray-700 bg-gray-800/50 hover:bg-gray-800 hover:border-indigo-500/50'
-                                            }`}>
-                                            {isProcessing ? (
-                                                <div className="flex flex-col items-center gap-2 py-2">
-                                                    <div className="w-8 h-8 border-3 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin"></div>
-                                                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest animate-pulse">Processing…</span>
-                                                </div>
-                                            ) : uploadedSig ? (
-                                                <div className="relative w-full px-4 flex items-center justify-center animate-in fade-in zoom-in duration-300">
-                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                    <img src={uploadedSig} alt="Uploaded" className="max-h-24 object-contain" />
-                                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-lg">
-                                                        <span className="text-xs font-bold text-white">Click to Change</span>
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                <>
-                                                    <span className="text-3xl opacity-50 group-hover:scale-110 group-hover:rotate-6 transition-all duration-300">🖼️</span>
-                                                    <div className="flex flex-col items-center">
-                                                        <span className="text-sm text-gray-400 font-medium tracking-tight">Click or Drag Image</span>
-                                                        <span className="text-[10px] text-gray-600 uppercase tracking-widest mt-0.5">PNG, JPG, WebP</span>
-                                                    </div>
-                                                </>
-                                            )}
-                                        </button>
-                                    </div>
-                                )}
+                                {/* Shared SignaturePad component */}
+                                <SignaturePad onChange={setSigDataUrl} />
 
                                 {/* Placement */}
                                 <div>
@@ -404,15 +218,15 @@ export default function PDFSign() {
                                     <div className="grid grid-cols-3 gap-3">
                                         <div>
                                             <label className="text-[11px] text-gray-500 block mb-1">X: {sigX}mm</label>
-                                            <input type="range" min={0} max={180} value={sigX} onChange={e => setSigX(+e.target.value)} className="w-full accent-indigo-500" />
+                                            <input type="range" min={0} max={180} value={sigX} onChange={(e) => setSigX(+e.target.value)} className="w-full accent-indigo-500" />
                                         </div>
                                         <div>
                                             <label className="text-[11px] text-gray-500 block mb-1">Y from top: {sigY}mm</label>
-                                            <input type="range" min={0} max={260} value={sigY} onChange={e => setSigY(+e.target.value)} className="w-full accent-indigo-500" />
+                                            <input type="range" min={0} max={260} value={sigY} onChange={(e) => setSigY(+e.target.value)} className="w-full accent-indigo-500" />
                                         </div>
                                         <div>
                                             <label className="text-[11px] text-gray-500 block mb-1">Width: {sigW}mm</label>
-                                            <input type="range" min={10} max={180} value={sigW} onChange={e => setSigW(+e.target.value)} className="w-full accent-indigo-500" />
+                                            <input type="range" min={10} max={180} value={sigW} onChange={(e) => setSigW(+e.target.value)} className="w-full accent-indigo-500" />
                                         </div>
                                     </div>
                                 </div>
@@ -424,14 +238,14 @@ export default function PDFSign() {
                                             Page: <span className="text-indigo-400">{targetPage}</span> of {pageCount}
                                         </label>
                                         <input type="range" min={1} max={pageCount} value={targetPage}
-                                            onChange={e => setTargetPage(+e.target.value)} className="w-full accent-indigo-500" />
+                                            onChange={(e) => setTargetPage(+e.target.value)} className="w-full accent-indigo-500" />
                                     </div>
                                 )}
 
                                 {/* Actions */}
                                 <ProcessingButton
                                     onClick={handleProcess}
-                                    onCancel={() => { isCancelledRef.current = true; }}
+                                    onCancel={handleCancel}
                                     isProcessing={status === 'processing'}
                                     idleLabel="✍️ Sign & Download"
                                     processingLabel="Signing…"
@@ -450,9 +264,11 @@ export default function PDFSign() {
                             {/* Right: live page preview */}
                             <div className="flex flex-col gap-2">
                                 <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Live Preview</label>
-                                <div className="relative rounded-xl overflow-hidden border border-gray-700/50 bg-gray-800 flex items-center justify-center cursor-crosshair"
+                                <div
+                                    className="relative rounded-xl overflow-hidden border border-gray-700/50 bg-gray-800 flex items-center justify-center cursor-crosshair"
                                     onClick={() => setIsSelected(false)}
-                                    style={{ aspectRatio: `${pageThumbW || 210} / ${pageThumbH || 297}` }}>
+                                    style={{ aspectRatio: `${pageThumbW || 210} / ${pageThumbH || 297}` }}
+                                >
                                     {pageThumb ? (
                                         <>
                                             {/* eslint-disable-next-line @next/next/no-img-element */}

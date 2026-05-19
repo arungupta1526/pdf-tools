@@ -1,5 +1,5 @@
 'use client';
-import React, { useRef } from 'react';
+import React, { useRef, useState, useCallback } from 'react';
 
 interface DropZoneProps {
     onFile: (file: File) => void;
@@ -16,13 +16,41 @@ export default function DropZone({
     multiple = false,
     label = 'Drop your PDF here'
 }: DropZoneProps) {
+    const [isDragActive, setIsDragActive] = useState(false);
+    const dragCounter = useRef(0);
     const inputRef = useRef<HTMLInputElement>(null);
 
-    const handleDrop = (e: React.DragEvent) => {
+    const handleDragEnter = useCallback((e: React.DragEvent) => {
         e.preventDefault();
+        e.stopPropagation();
+        dragCounter.current += 1;
+        if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+            setIsDragActive(true);
+        }
+    }, []);
+
+    const handleDragLeave = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter.current -= 1;
+        if (dragCounter.current === 0) {
+            setIsDragActive(false);
+        }
+    }, []);
+
+    const handleDragOver = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+    }, []);
+
+    const handleDrop = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter.current = 0;
+        setIsDragActive(false);
         const file = e.dataTransfer.files[0];
         if (file) onFile(file);
-    };
+    }, [onFile]);
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -33,9 +61,13 @@ export default function DropZone({
 
     return (
         <div
-            className="relative rounded-xl border-2 border-dashed border-gray-600 hover:border-indigo-500 transition-colors cursor-pointer bg-gray-800/40 hover:bg-gray-800/70 flex flex-col items-center justify-center py-8 px-6 gap-2"
+            className={`relative rounded-xl border-2 border-dashed transition-all cursor-pointer flex flex-col items-center justify-center py-8 px-6 gap-2
+                ${isDragActive ? 'border-indigo-500 bg-indigo-500/10 scale-[1.02]' : 'border-gray-600 hover:border-indigo-500 bg-gray-800/40 hover:bg-gray-800/70'}
+            `}
             onDrop={handleDrop}
-            onDragOver={(e) => e.preventDefault()}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
             onClick={() => inputRef.current?.click()}
             onKeyDown={handleKeyDown}
             role="button"

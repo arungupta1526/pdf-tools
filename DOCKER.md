@@ -51,7 +51,7 @@ docker build -t pdf-tools .
 
 ### What This Does
 
-- Reads the `Dockerfile`
+- Reads the [Dockerfile](./Dockerfile)
 - Prepares the Node environment and installs dependencies
 - Builds the Next.js application as a static export
 - Creates an optimized Docker image named `pdf-tools`

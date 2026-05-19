@@ -5,46 +5,61 @@ import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
 import DropZone from '@/components/DropZone';
-import { isPdfFile, loadPdfDocument, mapConcurrent, renderPdfPageImage, revokeObjectUrl } from '@/lib/pdf-browser';
-
-type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
+import { loadPdfDocument, mapConcurrent, renderPdfPageImage, revokeObjectUrl } from '@/lib/pdf-browser';
+import { usePdfTool } from '@/hooks/usePdfTool';
 
 interface PageThumb { pageNum: number; url: string; remove: boolean; }
 
 export default function PDFRemovePages() {
-    const [status, setStatus] = useState<Status>('idle');
-    const [fileName, setFileName] = useState('');
-    const [errorMsg, setErrorMsg] = useState('');
+    const {
+        status, setStatus,
+        fileName,
+        errorMsg, setErrorMsg,
+        downloadUrl, setDownloadUrl,
+        fileRef,
+        isCancelledRef,
+        handleFile: baseHandleFile
+    } = usePdfTool();
     const [showPreviews, setShowPreviews] = useState(false);
     const [thumbs, setThumbs] = useState<PageThumb[]>([]);
-    const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-    const isCancelledRef = useRef(false);
-    const fileRef = useRef<File | null>(null);
     const thumbUrlsRef = useRef<string[]>([]);
+    const generationIdRef = useRef(0);
 
     useEffect(() => {
         thumbUrlsRef.current = thumbs.map((thumb) => thumb.url);
     }, [thumbs]);
     useEffect(() => () => thumbUrlsRef.current.forEach(revokeObjectUrl), []);
-    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     const loadThumbs = useCallback(async (file: File, previews: boolean, currentThumbs: PageThumb[] = []) => {
         setStatus('loading');
+        const genId = ++generationIdRef.current;
         setThumbs((prev) => {
             prev.forEach((thumb) => revokeObjectUrl(thumb.url));
             return [];
         });
         try {
             const doc = await loadPdfDocument(await file.arrayBuffer());
+            if (genId !== generationIdRef.current) return;
             const pageNumbers = Array.from({ length: doc.numPages }, (_, index) => index + 1);
-            const results = await mapConcurrent(pageNumbers, 3, async (pageNum) => ({
-                pageNum,
-                url: (previews || pageNum === 1) ? await renderPdfPageImage(doc, pageNum, { scale: 0.4, quality: 0.7 }) : '',
-                remove: currentThumbs.length > 0 ? currentThumbs[pageNum - 1]?.remove ?? false : false,
-            }));
-            setThumbs(results); setStatus('ready');
-        } catch (e) { console.error(e); setErrorMsg('Failed to load PDF.'); setStatus('error'); }
-    }, []);
+            const results = await mapConcurrent(pageNumbers, 3, async (pageNum) => {
+                if (genId !== generationIdRef.current) throw new Error('CANCELLED_THUMB_GEN');
+                return {
+                    pageNum,
+                    url: (previews || pageNum === 1) ? await renderPdfPageImage(doc, pageNum, { scale: 0.4, quality: 0.7 }) : '',
+                    remove: currentThumbs.length > 0 ? currentThumbs[pageNum - 1]?.remove ?? false : false,
+                };
+            });
+            if (genId === generationIdRef.current) {
+                setThumbs(results); 
+                setStatus('ready');
+            }
+        } catch (e) { 
+            if (e instanceof Error && e.message === 'CANCELLED_THUMB_GEN') return;
+            console.error(e); 
+            setErrorMsg('Failed to load PDF.'); 
+            setStatus('error'); 
+        }
+    }, [setStatus, setErrorMsg]);
 
     useEffect(() => {
         if (fileRef.current && status !== 'idle' && status !== 'loading') {
@@ -54,16 +69,14 @@ export default function PDFRemovePages() {
     }, [showPreviews]);
 
     const handleFile = (file: File) => {
-        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file; setFileName(file.name); setErrorMsg('');
-        setDownloadUrl((prev) => {
-            revokeObjectUrl(prev);
-            return null;
+        baseHandleFile(file, (f) => {
+            loadThumbs(f, showPreviews);
         });
-        loadThumbs(file, showPreviews);
     };
 
-    const toggleRemove = (n: number) => setThumbs(prev => prev.map(t => t.pageNum === n ? { ...t, remove: !t.remove } : t));
+    const toggleRemove = (n: number) => setThumbs((prev) => prev.map((t) => t.pageNum === n ? { ...t, remove: !t.remove } : t));
+    const selectAll = () => setThumbs((prev) => prev.map((t) => ({ ...t, remove: true })));
+    const deselectAll = () => setThumbs((prev) => prev.map((t) => ({ ...t, remove: false })));
 
     const handleRemove = async () => {
         if (!fileRef.current) return;
@@ -110,10 +123,29 @@ export default function PDFRemovePages() {
                                     <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Click pages to mark for removal</p>
                                     {markedCount > 0 && <span className="text-xs text-red-400 font-medium">{markedCount} page{markedCount !== 1 ? 's' : ''} marked</span>}
                                 </div>
-                                <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                                    <input type="checkbox" checked={showPreviews} onChange={(e) => setShowPreviews(e.target.checked)} className="rounded border-gray-600 bg-gray-800 text-red-600 focus:ring-red-500" />
-                                    Show all page previews
-                                </label>
+                                <div className="flex items-center gap-3">
+                                    {/* Select All / Deselect All */}
+                                    <div className="flex gap-1">
+                                        <button
+                                            onClick={selectAll}
+                                            disabled={markedCount === thumbs.length}
+                                            className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-red-600/20 text-red-400 hover:bg-red-600/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                        >
+                                            Select All
+                                        </button>
+                                        <button
+                                            onClick={deselectAll}
+                                            disabled={markedCount === 0}
+                                            className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-gray-700 text-gray-400 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                        >
+                                            Deselect All
+                                        </button>
+                                    </div>
+                                    <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                                        <input type="checkbox" checked={showPreviews} onChange={(e) => setShowPreviews(e.target.checked)} className="rounded border-gray-600 bg-gray-800 text-red-600 focus:ring-red-500" />
+                                        Show all page previews
+                                    </label>
+                                </div>
                             </div>
                             <div className="grid grid-cols-4 sm:grid-cols-6 gap-3">
                                 {thumbs.map(t => (

@@ -24,6 +24,7 @@ export default function PDFPageNumbers() {
     const [startNum, setStartNum] = useState(1);
     const [fontSize, setFontSize] = useState(12);
     const [prefix, setPrefix] = useState('');
+    const [skipFirstPage, setSkipFirstPage] = useState(false);
 
     const fileRef = useRef<File | null>(null);
     // Cache raw page 1 ImageData
@@ -109,10 +110,11 @@ export default function PDFPageNumbers() {
 
             for (let i = 0; i < pages.length; i++) {
                 if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
+                if (skipFirstPage && i === 0) continue;
                 setProgress(`Page ${i + 1}/${pages.length}…`);
                 const page = pages[i];
                 const { width } = page.getSize();
-                const text = `${prefix}${startNum + i}`;
+                const text = `${prefix}${startNum + (skipFirstPage ? i - 1 : i)}`;
                 const textWidth = font.widthOfTextAtSize(text, fontSize);
                 let x: number;
                 if (position === 'bottom-left') x = 20;
@@ -176,6 +178,18 @@ export default function PDFPageNumbers() {
                                                 <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider block mb-1.5">Prefix</label>
                                                 <input type="text" value={prefix} onChange={e => setPrefix(e.target.value)} placeholder="e.g. 'Page '"
                                                     className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 outline-none focus:ring-2 focus:ring-indigo-500" />
+                                            </div>
+                                            <div className="flex items-center gap-2 mt-2">
+                                                <input 
+                                                    type="checkbox" 
+                                                    id="skipFirstPage"
+                                                    checked={skipFirstPage} 
+                                                    onChange={e => setSkipFirstPage(e.target.checked)}
+                                                    className="w-4 h-4 rounded bg-gray-800 border-gray-600 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-gray-900" 
+                                                />
+                                                <label htmlFor="skipFirstPage" className="text-sm text-gray-300 select-none cursor-pointer">
+                                                    Skip first page (cover)
+                                                </label>
                                             </div>
                                         </div>
                                     </div>

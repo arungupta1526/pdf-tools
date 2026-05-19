@@ -1,13 +1,14 @@
 'use client';
 
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
-import { canvasToBlob, isPdfFile, loadPdfDocument, mapConcurrent, renderPdfPageToCanvas, revokeObjectUrl } from '@/lib/pdf-browser';
+import PasswordPrompt from '@/components/PasswordPrompt';
+import { canvasToBlob, loadPdfDocument, mapConcurrent, renderPdfPageToCanvas } from '@/lib/pdf-browser';
+import { usePdfTool } from '@/hooks/usePdfTool';
 
-type Status = 'idle' | 'processing' | 'done' | 'error';
 type CompressMode = 'quality' | 'target';
 
 const QUALITY_OPTIONS = [
@@ -17,12 +18,22 @@ const QUALITY_OPTIONS = [
 ];
 
 export default function PDFCompress() {
-    const [status, setStatus] = useState<Status>('idle');
-    const [fileName, setFileName] = useState('');
+    const {
+        status, setStatus,
+        fileName,
+        errorMsg, setErrorMsg,
+        progress, setProgress,
+        downloadUrl, setDownloadUrl,
+        password,
+        fileRef,
+        isCancelledRef,
+        handleFile,
+        handleCancel,
+        handlePasswordSubmit,
+        handleError
+    } = usePdfTool();
+
     const [quality, setQuality] = useState(0.65);
-    const [progress, setProgress] = useState('');
-    const [errorMsg, setErrorMsg] = useState('');
-    const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [originalSize, setOriginalSize] = useState(0);
     const [compressedSize, setCompressedSize] = useState(0);
     const [finalQuality, setFinalQuality] = useState<number | null>(null);
@@ -31,33 +42,24 @@ export default function PDFCompress() {
     const [compressMode, setCompressMode] = useState<CompressMode>('quality');
     const [targetValue, setTargetValue] = useState('500');
     const [targetUnit, setTargetUnit] = useState<'KB' | 'MB'>('KB');
-    const isCancelledRef = useRef(false);
 
-    const fileRef = useRef<File | null>(null);
-
-    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
-
-    const handleFile = (file: File) => {
-        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file; setFileName(file.name);
-        setOriginalSize(file.size); setErrorMsg(''); setStatus('idle');
-        setDownloadUrl((prev) => {
-            revokeObjectUrl(prev);
-            return null;
-        });
-        setFinalQuality(null);
+    const onFileSelect = (file: File) => {
+        if (handleFile(file, (f) => setOriginalSize(f.size))) {
+            setFinalQuality(null);
+        }
     };
 
-    // ── Core: compress all pages at a given quality, return Uint8Array ──
+    // ── Core: compress pages at a given quality, return Uint8Array ──
     const compressAtQuality = useCallback(async (
         pdfjsDoc: Awaited<ReturnType<typeof loadPdfDocument>>,
         PDFDocument: typeof import('pdf-lib')['PDFDocument'],
         q: number,
-        onProgress?: (msg: string) => void
+        onProgress?: (msg: string) => void,
+        pageRange?: number[]
     ): Promise<Uint8Array> => {
         const outDoc = await PDFDocument.create();
         const pScale = 1.35;
-        const pageNumbers = Array.from({ length: pdfjsDoc.numPages }, (_, i) => i + 1);
+        const pageNumbers = pageRange || Array.from({ length: pdfjsDoc.numPages }, (_, i) => i + 1);
 
         const batchResults = await mapConcurrent(pageNumbers, 3, async (i: number) => {
             if (isCancelledRef.current) throw new Error('CANCELLED');
@@ -73,15 +75,12 @@ export default function PDFCompress() {
             p.drawImage(img, { x: 0, y: 0, width: res.w / pScale, height: res.h / pScale });
         }
         return outDoc.save();
-    }, []);
+    }, [isCancelledRef]);
 
     const handleCompress = async () => {
         if (!fileRef.current) return;
-        setStatus('processing'); setErrorMsg('');
-        setDownloadUrl((prev) => {
-            revokeObjectUrl(prev);
-            return null;
-        });
+        setStatus('processing');
+        setDownloadUrl(null);
         setFinalQuality(null);
         isCancelledRef.current = false;
 
@@ -90,7 +89,8 @@ export default function PDFCompress() {
                 import('pdf-lib'),
                 fileRef.current.arrayBuffer(),
             ]);
-            const pdfjsDoc = await loadPdfDocument(buf);
+            
+            const pdfjsDoc = await loadPdfDocument(buf, password);
 
             let outBytes: Uint8Array;
             let usedQuality: number;
@@ -100,52 +100,56 @@ export default function PDFCompress() {
                 outBytes = await compressAtQuality(pdfjsDoc, PDFDocument, quality, msg => setProgress(msg));
                 usedQuality = quality;
             } else {
-                // ── Target size mode — binary search ───────────────────────────
+                // ── Target size mode — binary search optimized ───────────────────
                 const targetNum = parseFloat(targetValue);
-                if (isNaN(targetNum) || targetNum <= 0) { setErrorMsg('Enter a valid target size.'); setStatus('idle'); return; }
+                if (isNaN(targetNum) || targetNum <= 0) { 
+                    setErrorMsg('Enter a valid target size.'); 
+                    setStatus('idle'); 
+                    return; 
+                }
                 const targetBytes = targetNum * (targetUnit === 'MB' ? 1024 * 1024 : 1024);
 
                 if (targetBytes >= originalSize) {
                     setErrorMsg('Target size is larger than the original — no compression needed.');
-                    setStatus('idle'); return;
+                    setStatus('idle'); 
+                    return;
                 }
 
-                let lo = 0.1, hi = 0.92, bestBytes: Uint8Array | null = null, bestQ = 0.5;
+                let lo = 0.1, hi = 0.92;
                 let iter = 0;
+                
+                // Pick middle page for testing to represent average complexity
+                const testPageNum = Math.max(1, Math.floor(pdfjsDoc.numPages / 2));
 
                 while (hi - lo > 0.02) {
                     iter++;
                     const mid = (lo + hi) / 2;
-                    setProgress(`Pass ${iter}: testing quality ${Math.round(mid * 100)}%…`);
-                    const candidate = await compressAtQuality(pdfjsDoc, PDFDocument, mid, msg => setProgress(`Pass ${iter}: ${msg}`));
-                    bestBytes = candidate; bestQ = mid;
-                    if (candidate.byteLength <= targetBytes) { lo = mid; } // fits → try higher quality
-                    else { hi = mid; }                                       // too big → lower quality
+                    setProgress(`Pass ${iter}: testing quality ${Math.round(mid * 100)}% on page ${testPageNum}…`);
+                    const candidate = await compressAtQuality(pdfjsDoc, PDFDocument, mid, msg => setProgress(`Pass ${iter}: ${msg}`), [testPageNum]);
+                    const extrapolatedSize = candidate.byteLength * pdfjsDoc.numPages;
+                    if (extrapolatedSize <= targetBytes) { lo = mid; } // fits → try higher quality
+                    else { hi = mid; }                                 // too big → lower quality
                 }
 
                 // Final pass at lo quality (closest that fits target)
-                setProgress('Final compression pass…');
+                setProgress('Final compression pass on all pages…');
                 outBytes = await compressAtQuality(pdfjsDoc, PDFDocument, lo, msg => setProgress(`Finalizing: ${msg}`));
                 usedQuality = lo;
-                // If final is still bigger than target (edge case), use bestBytes
-                if (outBytes.byteLength > targetBytes && bestBytes) {
-                    outBytes = bestBytes; usedQuality = bestQ;
-                }
             }
 
             setCompressedSize(outBytes.byteLength);
             setFinalQuality(usedQuality);
             const blob = new Blob([outBytes as unknown as BlobPart], { type: 'application/pdf' });
-            setDownloadUrl((prev) => {
-                revokeObjectUrl(prev);
-                return URL.createObjectURL(blob);
-            });
-            setProgress(''); setStatus('done');
+            setDownloadUrl(URL.createObjectURL(blob));
+            setProgress(''); 
+            setStatus('done');
         } catch (e) { 
             if (e instanceof Error && e.message === 'CANCELLED') {
-                setStatus('idle'); setProgress(''); return;
+                setStatus('idle'); 
+                setProgress(''); 
+                return;
             }
-            console.error(e); setErrorMsg('Compression failed.'); setStatus('error'); 
+            handleError(e, 'Compression failed.');
         }
     };
 
@@ -163,9 +167,20 @@ export default function PDFCompress() {
                     description="Reduce the file size of your PDF while maintaining optimal quality." 
                 />
                 <div className="bg-gray-900 rounded-2xl border border-gray-700/50 p-5 flex flex-col gap-4">
-                    <DropZone onFile={handleFile} fileName={fileName} />
+                    <DropZone onFile={onFileSelect} fileName={fileName} />
 
-                    {fileName && (
+                    {status === 'needs_password' && (
+                        <PasswordPrompt 
+                            onSubmit={(pwd) => {
+                                handlePasswordSubmit(pwd);
+                                setTimeout(handleCompress, 100);
+                            }}
+                            onCancel={() => setStatus('idle')}
+                            errorMsg={errorMsg}
+                        />
+                    )}
+
+                    {fileName && status !== 'needs_password' && (
                         <>
                             {/* ── Mode Tabs ── */}
                             <div className="flex gap-2 p-1 bg-gray-800 rounded-xl">
@@ -223,9 +238,16 @@ export default function PDFCompress() {
                                 </div>
                             )}
 
+                            {/* Raster compression warning */}
+                            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-4 py-3 text-yellow-300 text-xs flex gap-2">
+                                <span className="shrink-0">⚠️</span>
+                                <span>
+                                    <strong>Note:</strong> Compression re-renders pages as JPEG images. Vector content, selectable text, fonts, and hyperlinks will be converted to raster — original quality cannot be recovered from the output.
+                                </span>
+                            </div>
                             <ProcessingButton
                                 onClick={handleCompress}
-                                onCancel={() => { isCancelledRef.current = true; }}
+                                onCancel={handleCancel}
                                 isProcessing={status === 'processing'}
                                 idleLabel="🗜️ Compress PDF"
                                 processingLabel={progress || 'Processing…'}

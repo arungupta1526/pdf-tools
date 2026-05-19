@@ -5,9 +5,9 @@ import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
-import { canvasToBlob, isPdfFile, loadPdfDocument, mapConcurrent, renderPdfPageImage, renderPdfPageToCanvas, revokeObjectUrl, type PdfJsDocument } from '@/lib/pdf-browser';
+import { canvasToBlob, loadPdfDocument, mapConcurrent, renderPdfPageImage, renderPdfPageToCanvas, revokeObjectUrl, parseRange } from '@/lib/pdf-browser';
+import { usePdfTool } from '@/hooks/usePdfTool';
 
-type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
 type OutputFormat = 'pdf-merged' | 'pdf-zip' | 'jpg-zip' | 'png-zip';
 type SplitMode = 'select' | 'range' | 'all';
 
@@ -21,53 +21,66 @@ const OUTPUT_FORMATS: { value: OutputFormat; label: string; icon: string; desc: 
 ];
 
 export default function PDFSplit() {
-    const [status, setStatus] = useState<Status>('idle');
-    const [fileName, setFileName] = useState('');
-    const [errorMsg, setErrorMsg] = useState('');
-    const [progress, setProgress] = useState('');
+    const {
+        status, setStatus,
+        fileName,
+        errorMsg, setErrorMsg,
+        progress, setProgress,
+        downloadUrl, setDownloadUrl,
+        fileRef,
+        isCancelledRef,
+        handleFile: baseHandleFile
+    } = usePdfTool();
+
     const [thumbs, setThumbs] = useState<PageThumb[]>([]);
     const [totalPages, setTotalPages] = useState(0);
     const [showPreviews, setShowPreviews] = useState(false);
     const [splitMode, setSplitMode] = useState<SplitMode>('select');
     const [rangeInput, setRangeInput] = useState('');
     const [outputFormat, setOutputFormat] = useState<OutputFormat>('pdf-merged');
-    const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [downloadName, setDownloadName] = useState('');
-    const isCancelledRef = useRef(false);
-    const fileRef = useRef<File | null>(null);
-    const pdfjsDocRef = useRef<PdfJsDocument | null>(null);
     const thumbUrlsRef = useRef<string[]>([]);
+    const generationIdRef = useRef(0);
 
     useEffect(() => {
         thumbUrlsRef.current = thumbs.map((thumb) => thumb.url);
     }, [thumbs]);
     useEffect(() => () => thumbUrlsRef.current.forEach(revokeObjectUrl), []);
-    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     // ── Load page thumbnails ───────────────────────────────────────────────
     const loadThumbs = useCallback(async (file: File, previews: boolean, currentThumbs: PageThumb[] = []) => {
         setStatus('loading');
+        const genId = ++generationIdRef.current;
         setThumbs((prev) => {
             prev.forEach((thumb) => revokeObjectUrl(thumb.url));
             return [];
         });
-        setDownloadUrl((prev) => {
-            revokeObjectUrl(prev);
-            return null;
-        });
+        
         try {
             const doc = await loadPdfDocument(await file.arrayBuffer());
-            pdfjsDocRef.current = doc;
+            if (genId !== generationIdRef.current) return;
+            
             setTotalPages(doc.numPages);
             const pageNumbers = Array.from({ length: doc.numPages }, (_, index) => index + 1);
-            const results = await mapConcurrent(pageNumbers, 3, async (pageNum) => ({
-                pageNum,
-                url: (previews || pageNum === 1) ? await renderPdfPageImage(doc, pageNum, { scale: 0.4, quality: 0.7 }) : '',
-                selected: currentThumbs.length > 0 ? currentThumbs[pageNum - 1]?.selected ?? true : true,
-            }));
-            setThumbs(results); setStatus('ready');
-        } catch (e) { console.error(e); setErrorMsg('Failed to load PDF.'); setStatus('error'); }
-    }, []);
+            const results = await mapConcurrent(pageNumbers, 3, async (pageNum) => {
+                if (genId !== generationIdRef.current) throw new Error('CANCELLED_THUMB_GEN');
+                return {
+                    pageNum,
+                    url: (previews || pageNum === 1) ? await renderPdfPageImage(doc, pageNum, { scale: 0.4, quality: 0.7 }) : '',
+                    selected: currentThumbs.length > 0 ? currentThumbs[pageNum - 1]?.selected ?? true : true,
+                };
+            });
+            if (genId === generationIdRef.current) {
+                setThumbs(results); 
+                setStatus('ready');
+            }
+        } catch (e) { 
+            if (e instanceof Error && e.message === 'CANCELLED_THUMB_GEN') return;
+            console.error(e); 
+            setErrorMsg('Failed to load PDF.'); 
+            setStatus('error'); 
+        }
+    }, [setErrorMsg, setStatus]);
 
     useEffect(() => {
         if (fileRef.current && status !== 'idle' && status !== 'loading') {
@@ -77,25 +90,14 @@ export default function PDFSplit() {
     }, [showPreviews]);
 
     const handleFile = (file: File) => {
-        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file; setFileName(file.name); setErrorMsg(''); loadThumbs(file, showPreviews);
+        baseHandleFile(file, (f) => {
+            loadThumbs(f, showPreviews);
+        });
     };
 
     const togglePage = (n: number) => setThumbs(prev => prev.map(t => t.pageNum === n ? { ...t, selected: !t.selected } : t));
     const selectAll = () => setThumbs(prev => prev.map(t => ({ ...t, selected: true })));
     const selectNone = () => setThumbs(prev => prev.map(t => ({ ...t, selected: false })));
-
-    const parseRange = (input: string, max: number): number[] => {
-        const pages = new Set<number>();
-        input.split(',').forEach(part => {
-            const m = part.trim().match(/^(\d+)(?:-(\d+))?$/);
-            if (m) {
-                const start = parseInt(m[1]), end = m[2] ? parseInt(m[2]) : start;
-                for (let i = Math.max(1, start); i <= Math.min(max, end); i++) pages.add(i);
-            }
-        });
-        return [...pages].sort((a, b) => a - b);
-    };
 
     const getSelectedPages = (): number[] => {
         if (splitMode === 'all') return Array.from({ length: totalPages }, (_, i) => i + 1);
@@ -105,7 +107,7 @@ export default function PDFSplit() {
 
     // ── Render a page at full quality → canvas ────────────────────────────
     const renderPageCanvas = async (pageNum: number, scale = 2): Promise<HTMLCanvasElement> => {
-        const doc = pdfjsDocRef.current!;
+        const doc = await loadPdfDocument(await fileRef.current!.arrayBuffer());
         return renderPdfPageToCanvas(doc, pageNum, { scale });
     };
 

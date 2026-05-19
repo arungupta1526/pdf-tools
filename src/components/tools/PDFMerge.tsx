@@ -4,32 +4,21 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
-import { isPdfFile, revokeObjectUrl, loadPdfDocument } from '@/lib/pdf-browser';
-
-type Status = 'idle' | 'processing' | 'done' | 'error';
+import { isPdfFile, revokeObjectUrl, loadPdfDocument, parseRange } from '@/lib/pdf-browser';
+import { usePdfTool } from '@/hooks/usePdfTool';
 
 interface PDFItem { id: string; file: File; name: string; pageRange: string; totalPages?: number; }
 
-const parseRange = (input: string, max: number): number[] => {
-    if (!input || !input.trim()) return Array.from({ length: max }, (_, i) => i);
-    const pages = new Set<number>();
-    input.split(',').forEach(part => {
-        const m = part.trim().match(/^(\d+)(?:-(\d+))?$/);
-        if (m) {
-            const start = parseInt(m[1]), end = m[2] ? parseInt(m[2]) : start;
-            for (let i = Math.max(1, start); i <= Math.min(max, end); i++) pages.add(i - 1); // 0-indexed for pdf-lib
-        }
-    });
-    return [...pages].sort((a, b) => a - b);
-};
-
 export default function PDFMerge() {
+    const {
+        status, setStatus,
+        errorMsg, setErrorMsg,
+        progress, setProgress,
+        downloadUrl, setDownloadUrl,
+        isCancelledRef,
+    } = usePdfTool();
+    
     const [items, setItems] = useState<PDFItem[]>([]);
-    const [status, setStatus] = useState<Status>('idle');
-    const [progress, setProgress] = useState('');
-    const [errorMsg, setErrorMsg] = useState('');
-    const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-    const isCancelledRef = useRef(false);
     const inputRef = useRef<HTMLInputElement>(null);
     const dragItem = useRef<number | null>(null);
     const dragOverItem = useRef<number | null>(null);
@@ -112,7 +101,7 @@ export default function PDFMerge() {
                 setProgress(`Merging ${i + 1}/${items.length}: ${items[i].name}`);
                 const bytes = await items[i].file.arrayBuffer();
                 const doc = await PDFDocument.load(bytes);
-                const pageIndicesToCopy = parseRange(items[i].pageRange, doc.getPageCount());
+                const pageIndicesToCopy = parseRange(items[i].pageRange, doc.getPageCount()).map(p => p - 1); // 0-indexed for pdf-lib
                 if (pageIndicesToCopy.length === 0) continue;
                 const pages = await outDoc.copyPages(doc, pageIndicesToCopy);
                 pages.forEach(p => outDoc.addPage(p));
@@ -127,7 +116,7 @@ export default function PDFMerge() {
             });
             setProgress(''); setStatus('done');
         } catch (e) { console.error(e); setErrorMsg('Merge failed.'); setStatus('error'); }
-    }, [items]);
+    }, [items, isCancelledRef, setDownloadUrl, setErrorMsg, setProgress, setStatus]);
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white flex flex-col">

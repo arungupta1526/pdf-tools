@@ -5,47 +5,62 @@ import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
-import { isPdfFile, loadPdfDocument, mapConcurrent, renderPdfPageImage, revokeObjectUrl } from '@/lib/pdf-browser';
-
-type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
+import { loadPdfDocument, mapConcurrent, renderPdfPageImage, revokeObjectUrl } from '@/lib/pdf-browser';
+import { usePdfTool } from '@/hooks/usePdfTool';
 
 interface PageItem { pageNum: number; url: string; rotation: number; }
 
 export default function PDFRotate() {
-    const [status, setStatus] = useState<Status>('idle');
-    const [fileName, setFileName] = useState('');
-    const [errorMsg, setErrorMsg] = useState('');
+    const {
+        status, setStatus,
+        fileName,
+        errorMsg, setErrorMsg,
+        downloadUrl, setDownloadUrl,
+        fileRef,
+        isCancelledRef,
+        handleFile: baseHandleFile
+    } = usePdfTool();
     const [showPreviews, setShowPreviews] = useState(false);
     const [pages, setPages] = useState<PageItem[]>([]);
     const [globalRotation, setGlobalRotation] = useState(0);
-    const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-    const isCancelledRef = useRef(false);
-    const fileRef = useRef<File | null>(null);
     const pageUrlsRef = useRef<string[]>([]);
+    const generationIdRef = useRef(0);
 
     useEffect(() => {
         pageUrlsRef.current = pages.map((page) => page.url);
     }, [pages]);
     useEffect(() => () => pageUrlsRef.current.forEach(revokeObjectUrl), []);
-    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     const loadThumbs = useCallback(async (file: File, previews: boolean, currentPages: PageItem[] = []) => {
         setStatus('loading');
+        const genId = ++generationIdRef.current;
         setPages((prev) => {
             prev.forEach((page) => revokeObjectUrl(page.url));
             return [];
         });
         try {
             const doc = await loadPdfDocument(await file.arrayBuffer());
+            if (genId !== generationIdRef.current) return;
             const pageNumbers = Array.from({ length: doc.numPages }, (_, index) => index + 1);
-            const results = await mapConcurrent(pageNumbers, 3, async (pageNum) => ({
-                pageNum,
-                url: (previews || pageNum === 1) ? await renderPdfPageImage(doc, pageNum, { scale: 0.35, quality: 0.6 }) : '',
-                rotation: currentPages.length > 0 ? currentPages[pageNum - 1]?.rotation ?? 0 : 0,
-            }));
-            setPages(results); setStatus('ready');
-        } catch (e) { console.error(e); setErrorMsg('Failed to load PDF.'); setStatus('error'); }
-    }, []);
+            const results = await mapConcurrent(pageNumbers, 3, async (pageNum) => {
+                if (genId !== generationIdRef.current) throw new Error('CANCELLED_THUMB_GEN');
+                return {
+                    pageNum,
+                    url: (previews || pageNum === 1) ? await renderPdfPageImage(doc, pageNum, { scale: 0.35, quality: 0.6 }) : '',
+                    rotation: currentPages.length > 0 ? currentPages[pageNum - 1]?.rotation ?? 0 : 0,
+                };
+            });
+            if (genId === generationIdRef.current) {
+                setPages(results);
+                setStatus('ready');
+            }
+        } catch (e) {
+            if (e instanceof Error && e.message === 'CANCELLED_THUMB_GEN') return;
+            console.error(e);
+            setErrorMsg('Failed to load PDF.');
+            setStatus('error');
+        }
+    }, [setStatus, setErrorMsg]);
 
     useEffect(() => {
         if (fileRef.current && status !== 'idle' && status !== 'loading') {
@@ -55,13 +70,9 @@ export default function PDFRotate() {
     }, [showPreviews]);
 
     const handleFile = (file: File) => {
-        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file; setFileName(file.name); setErrorMsg('');
-        setDownloadUrl((prev) => {
-            revokeObjectUrl(prev);
-            return null;
+        baseHandleFile(file, (f) => {
+            loadThumbs(f, showPreviews);
         });
-        loadThumbs(file, showPreviews);
     };
 
     const rotatePage = (n: number, deg: number) =>

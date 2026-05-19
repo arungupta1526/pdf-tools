@@ -9,16 +9,12 @@ import { canvasToObjectUrl, isPdfFile, loadPdfDocument, renderPdfPageToCanvas, r
 
 type Status = 'idle' | 'processing' | 'done' | 'error';
 
-const COLOR_MAP: Record<string, [number, number, number]> = {
-    gray: [0.5, 0.5, 0.5],
-    red: [0.8, 0.1, 0.1],
-    blue: [0.1, 0.2, 0.8],
-};
-
-const CANVAS_COLOR: Record<string, string> = {
-    gray: 'rgba(100,100,100,',
-    red: 'rgba(200,25,25,',
-    blue: 'rgba(25,50,200,',
+// Hex to RGB helpers
+const hexToRgb = (hex: string) => {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return [r, g, b];
 };
 
 export default function PDFWatermark() {
@@ -36,7 +32,7 @@ export default function PDFWatermark() {
     const [opacity, setOpacity] = useState(0.15);
     const [fontSize, setFontSize] = useState(48);
     const [position, setPosition] = useState<'diagonal' | 'center' | 'top' | 'bottom'>('diagonal');
-    const [color, setColor] = useState<'gray' | 'red' | 'blue'>('gray');
+    const [color, setColor] = useState('#808080');
 
     const fileRef = useRef<File | null>(null);
     const page1Ref = useRef<ImageData | null>(null);
@@ -56,7 +52,8 @@ export default function PDFWatermark() {
         // Scale font size to match canvas resolution (scale=1.35)
         const scaledFontSize = fontSize * 1.35;
         ctx.font = `bold ${scaledFontSize}px Helvetica, Arial, sans-serif`;
-        ctx.fillStyle = `${CANVAS_COLOR[color]}${opacity})`;
+        const [r, g, b] = hexToRgb(color);
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
         ctx.textBaseline = 'middle';
 
         const textWidth = ctx.measureText(text).width;
@@ -125,7 +122,8 @@ export default function PDFWatermark() {
             const doc = await PDFDocument.load(bytes);
             const font = await doc.embedFont(StandardFonts.HelveticaBold);
             const pages = doc.getPages();
-            const [cr, cg, cb] = COLOR_MAP[color];
+            const [r, g, b] = hexToRgb(color);
+            const cr = r / 255, cg = g / 255, cb = b / 255;
 
             for (let i = 0; i < pages.length; i++) {
                 if (isCancelledRef.current) { setStatus('idle'); setProgress(''); return; }
@@ -191,13 +189,22 @@ export default function PDFWatermark() {
                                         <div className="flex flex-col gap-3">
                                             <div>
                                                 <label className="text-xs text-gray-400 font-semibold uppercase tracking-wider block mb-1.5">Color</label>
-                                                <div className="flex gap-2">
-                                                    {(['gray', 'red', 'blue'] as const).map(c => (
-                                                        <button key={c} onClick={() => setColor(c)}
-                                                            className={`flex-1 py-2 rounded-lg text-sm font-medium capitalize transition-all ${color === c ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
-                                                            {c}
-                                                        </button>
-                                                    ))}
+                                                <div className="flex items-center gap-3">
+                                                    <div className="flex gap-2">
+                                                        {['#808080', '#cc1a1a', '#1a33cc'].map(c => (
+                                                            <button key={c} onClick={() => setColor(c)}
+                                                                className={`w-8 h-8 rounded-full border-2 transition-all ${color.toLowerCase() === c ? 'border-white scale-110' : 'border-transparent'}`}
+                                                                style={{ backgroundColor: c }}
+                                                            />
+                                                        ))}
+                                                    </div>
+                                                    <input 
+                                                        type="color" 
+                                                        value={color} 
+                                                        onChange={e => setColor(e.target.value)}
+                                                        className="w-8 h-8 rounded-full cursor-pointer border-0 bg-transparent"
+                                                        title="Custom Color"
+                                                    />
                                                 </div>
                                             </div>
                                             <div>

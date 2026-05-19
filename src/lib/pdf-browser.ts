@@ -40,12 +40,13 @@ export async function getPdfJs(): Promise<PdfJsModule> {
     return pdfjsPromise;
 }
 
-export async function loadPdfDocument(source: ArrayBuffer | Uint8Array): Promise<PdfJsDocument> {
+export async function loadPdfDocument(source: ArrayBuffer | Uint8Array, password?: string): Promise<PdfJsDocument> {
     const pdfjs = await getPdfJs();
     const data = source instanceof Uint8Array ? source : new Uint8Array(source);
 
     return pdfjs.getDocument({
         data,
+        password,
         cMapUrl: getCMapUrl(),
         cMapPacked: true,
     }).promise as Promise<PdfJsDocument>;
@@ -163,4 +164,18 @@ export async function mapConcurrent<T, R>(
     await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
     return results;
+}
+
+export function parseRange(input: string, max: number): number[] {
+    if (!input || !input.trim()) return Array.from({ length: max }, (_, i) => i + 1);
+    const pages = new Set<number>();
+    input.split(',').forEach((part) => {
+        const m = part.trim().match(/^(\d+)(?:-(\d+))?$/);
+        if (m) {
+            const start = parseInt(m[1], 10);
+            const end = m[2] ? parseInt(m[2], 10) : start;
+            for (let i = Math.max(1, start); i <= Math.min(max, end); i++) pages.add(i);
+        }
+    });
+    return [...pages].sort((a, b) => a - b);
 }

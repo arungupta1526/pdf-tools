@@ -2,11 +2,11 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import ProcessingButton from '@/components/ProcessingButton';
+import DropZone from '@/components/DropZone';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
-import { canvasToBlob, canvasToObjectUrl, isPdfFile, loadPdfDocument, renderPdfPageToCanvas, revokeObjectUrl, type PdfJsDocument } from '@/lib/pdf-browser';
-
-type Status = 'idle' | 'processing' | 'done' | 'error';
+import { canvasToBlob, canvasToObjectUrl, loadPdfDocument, renderPdfPageToCanvas, revokeObjectUrl, type PdfJsDocument } from '@/lib/pdf-browser';
+import { usePdfTool } from '@/hooks/usePdfTool';
 
 // ─── Color helpers ────────────────────────────────────────────────────────────
 
@@ -71,10 +71,18 @@ const PRESET_COLORS: { label: string; hex: string; bg: string }[] = [
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function PDFInverter() {
-    const [status, setStatus] = useState<Status>('idle');
-    const [fileName, setFileName] = useState('');
+    const {
+        status, setStatus,
+        fileName,
+        errorMsg, setErrorMsg,
+        progress, setProgress,
+        downloadUrl, setDownloadUrl,
+        fileRef,
+        isCancelledRef,
+        handleFile: baseHandleFile
+    } = usePdfTool();
+
     const [hexColor, setHexColor] = useState('');
-    const [errorMsg, setErrorMsg] = useState('');
     const [swatches, setSwatches] = useState<string[]>([]);
 
     // Preview state
@@ -86,13 +94,8 @@ export default function PDFInverter() {
     const [invertedUrl, setInvertedUrl] = useState<string | null>(null);
 
     // Download
-    const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [downloadName, setDownloadName] = useState('');
-    const [progress, setProgress] = useState('');
-    const isCancelledRef = useRef(false);
 
-    const fileRef = useRef<File | null>(null);
-    const inputRef = useRef<HTMLInputElement>(null);
     const colorPickerRef = useRef<HTMLInputElement>(null);
     const pdfjsDocRef = useRef<PdfJsDocument | null>(null);
     // Cache: pageNum → raw ImageData (max 10 pages)
@@ -182,7 +185,6 @@ export default function PDFInverter() {
 
     useEffect(() => () => revokeObjectUrl(originalUrl), [originalUrl]);
     useEffect(() => () => revokeObjectUrl(invertedUrl), [invertedUrl]);
-    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     // ── Initialize pdfjs and load page 1 on file select ──────────────────
     const initPdf = useCallback(async (file: File) => {
@@ -216,16 +218,13 @@ export default function PDFInverter() {
         } finally {
             setPreviewLoading(false);
         }
-    }, [loadPage]);
+    }, [loadPage, setDownloadUrl, setErrorMsg]);
 
     const handleFile = useCallback((file: File) => {
-        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF file.'); return; }
-        fileRef.current = file;
-        setFileName(file.name);
-        setStatus('idle');
-        setErrorMsg('');
-        initPdf(file);
-    }, [initPdf]);
+        baseHandleFile(file, (f) => {
+            initPdf(f);
+        });
+    }, [baseHandleFile, initPdf]);
 
     // ── Page navigation ────────────────────────────────────────────────────
     const goToPage = useCallback((n: number) => {
@@ -349,7 +348,7 @@ export default function PDFInverter() {
             setStatus('error');
             setProgress('');
         }
-    }, [hexColor]);
+    }, [hexColor, isCancelledRef, setDownloadUrl, setErrorMsg, setProgress, setStatus]);
 
     const isHexValid = hexColor.length === 0 || hexToRgb(hexColor) !== null;
     const previewColor = isHexValid && hexColor.startsWith('#') && hexColor.length === 7 ? hexColor : null;
@@ -367,28 +366,9 @@ export default function PDFInverter() {
                 {/* ── Control Card ── */}
                 <div className="bg-gray-900 rounded-2xl shadow-2xl border border-gray-700/50 overflow-hidden">
 
-                    {/* Drop Zone */}
-                    <div
-                        className="relative m-5 rounded-xl border-2 border-dashed border-gray-600 hover:border-indigo-500 transition-colors cursor-pointer bg-gray-800/40 hover:bg-gray-800/70 flex flex-col items-center justify-center py-7 px-6 gap-2"
-                        onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
-                        onDragOver={(e) => e.preventDefault()}
-                        onClick={() => inputRef.current?.click()}
-                        role="button" aria-label="Upload PDF"
-                    >
-                        <div className="text-4xl opacity-60">📄</div>
-                        {fileName ? (
-                            <div className="text-center">
-                                <p className="text-indigo-400 font-semibold break-all text-sm">{fileName}</p>
-                                <p className="text-gray-500 text-xs mt-0.5">Click or drop to replace</p>
-                            </div>
-                        ) : (
-                            <div className="text-center">
-                                <p className="text-gray-300 font-medium">Drop your PDF here</p>
-                                <p className="text-gray-500 text-xs mt-0.5">or click to browse</p>
-                            </div>
-                        )}
-                        <input ref={inputRef} type="file" accept="application/pdf" className="hidden"
-                            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+                {/* Drop Zone — shared DropZone component for consistency */}
+                    <div className="m-5">
+                        <DropZone onFile={handleFile} fileName={fileName} />
                     </div>
 
                     <div className="px-5 pb-5 flex flex-col gap-4">

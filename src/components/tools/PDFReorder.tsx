@@ -5,9 +5,8 @@ import DropZone from '@/components/DropZone';
 import ProcessingButton from '@/components/ProcessingButton';
 import ToolHeader from '@/components/ToolHeader';
 import ToolHero from '@/components/ToolHero';
-import { isPdfFile, loadPdfDocument, mapConcurrent, renderPdfPageImage, revokeObjectUrl } from '@/lib/pdf-browser';
-
-type Status = 'idle' | 'loading' | 'ready' | 'processing' | 'done' | 'error';
+import { loadPdfDocument, mapConcurrent, renderPdfPageImage, revokeObjectUrl } from '@/lib/pdf-browser';
+import { usePdfTool } from '@/hooks/usePdfTool';
 
 interface PageItem {
     pageNum: number;  // 1-indexed original page number
@@ -15,27 +14,31 @@ interface PageItem {
 }
 
 export default function PDFReorder() {
-    const [status, setStatus] = useState<Status>('idle');
-    const [fileName, setFileName] = useState('');
-    const [errorMsg, setErrorMsg] = useState('');
+    const {
+        status, setStatus,
+        fileName,
+        errorMsg, setErrorMsg,
+        downloadUrl, setDownloadUrl,
+        fileRef,
+        isCancelledRef,
+        handleFile: baseHandleFile
+    } = usePdfTool();
     const [showPreviews, setShowPreviews] = useState(false);
     const [pages, setPages] = useState<PageItem[]>([]);
-    const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
     const [dragIdx, setDragIdx] = useState<number | null>(null);
     const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
-    const isCancelledRef = useRef(false);
 
-    const fileRef = useRef<File | null>(null);
     const pageThumbUrlsRef = useRef<string[]>([]);
+    const generationIdRef = useRef(0);
 
     useEffect(() => {
         pageThumbUrlsRef.current = pages.map((page) => page.thumb);
     }, [pages]);
     useEffect(() => () => pageThumbUrlsRef.current.forEach(revokeObjectUrl), []);
-    useEffect(() => () => revokeObjectUrl(downloadUrl), [downloadUrl]);
 
     const loadThumbs = useCallback(async (file: File, previews: boolean, currentPages: PageItem[] = []) => {
         setStatus('loading');
+        const genId = ++generationIdRef.current;
         setPages((prev) => {
             prev.forEach((page) => revokeObjectUrl(page.thumb));
             return [];
@@ -43,24 +46,31 @@ export default function PDFReorder() {
 
         try {
             const pdfDoc = await loadPdfDocument(await file.arrayBuffer());
+            if (genId !== generationIdRef.current) return;
             const pageNumbers = Array.from({ length: pdfDoc.numPages }, (_, index) => index + 1);
             
             // Map the current page order if it exists
             const orderMap = currentPages.length > 0 ? currentPages.map(p => p.pageNum) : pageNumbers;
 
-            const thumbs = await mapConcurrent(orderMap, 3, async (pageNum) => ({
-                pageNum,
-                thumb: (previews || pageNum === 1) ? await renderPdfPageImage(pdfDoc, pageNum, { scale: 0.5, quality: 0.7 }) : '',
-            }));
+            const thumbs = await mapConcurrent(orderMap, 3, async (pageNum) => {
+                if (genId !== generationIdRef.current) throw new Error('CANCELLED_THUMB_GEN');
+                return {
+                    pageNum,
+                    thumb: (previews || pageNum === 1) ? await renderPdfPageImage(pdfDoc, pageNum, { scale: 0.5, quality: 0.7 }) : '',
+                };
+            });
 
-            setPages(thumbs);
-            setStatus('ready');
+            if (genId === generationIdRef.current) {
+                setPages(thumbs);
+                setStatus('ready');
+            }
         } catch (e) {
+            if (e instanceof Error && e.message === 'CANCELLED_THUMB_GEN') return;
             console.error(e);
             setErrorMsg('Could not load PDF pages.');
             setStatus('error');
         }
-    }, []);
+    }, [setStatus, setErrorMsg]);
 
     useEffect(() => {
         if (fileRef.current && status !== 'idle' && status !== 'loading') {
@@ -70,16 +80,10 @@ export default function PDFReorder() {
     }, [showPreviews]);
 
     const handleFile = useCallback((file: File) => {
-        if (!isPdfFile(file)) { setErrorMsg('Please upload a PDF.'); return; }
-        fileRef.current = file;
-        setFileName(file.name);
-        setErrorMsg('');
-        setDownloadUrl((prev) => {
-            revokeObjectUrl(prev);
-            return null;
+        baseHandleFile(file, (f) => {
+            loadThumbs(f, showPreviews);
         });
-        loadThumbs(file, showPreviews);
-    }, [loadThumbs, showPreviews]);
+    }, [baseHandleFile, loadThumbs, showPreviews]);
 
     // Drag handlers
     const onDragStart = (i: number) => setDragIdx(i);

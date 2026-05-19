@@ -55,11 +55,14 @@ export default function PDFUnlock() {
             setStatus('done');
         } catch (e: unknown) {
             console.error(e);
-            const msg = (e as Error)?.message ?? '';
-            if (msg.includes('password') || msg.includes('encrypt')) {
-                setErrorMsg('Wrong password or unsupported encryption type.');
+            const err = e as { name?: string; message?: string };
+            // Check structured error type first (more robust than message string matching)
+            if (err?.name === 'PasswordException' || err?.name === 'EncryptedPDFError') {
+                setErrorMsg('Wrong password or unsupported encryption type. Please check the password and try again.');
+            } else if (err?.message && (err.message.includes('password') || err.message.includes('encrypt'))) {
+                setErrorMsg('Wrong password or unsupported encryption type. Please check the password and try again.');
             } else {
-                setErrorMsg('Failed to unlock. The PDF may use unsupported encryption.');
+                setErrorMsg('Failed to unlock. The PDF may use an unsupported encryption standard (e.g. AES-256).');
             }
             setStatus('error');
         }
