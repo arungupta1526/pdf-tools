@@ -2,6 +2,10 @@
 
 This guide explains how to build and run the **PDF Tools Suite** using Docker for local development or self-hosting.
 
+Pre-built and hardened Docker images are automatically published to:
+- **Docker Hub:** [hub.docker.com/r/arungupta1526/pdf-tools](https://hub.docker.com/r/arungupta1526/pdf-tools)
+- **GitHub Container Registry (GHCR):** [github.com/arungupta1526/pdf-tools/pkgs/container/pdf-tools](https://github.com/arungupta1526/pdf-tools/pkgs/container/pdf-tools)
+
 ---
 
 # 📦 What Is Docker?
@@ -70,11 +74,26 @@ Successfully tagged pdf-tools:latest
 
 # ▶️ Step 2 — Run the Container
 
-Start the application using:
+Start the application using your locally built image:
 
 ```bash
 docker run -p 3000:3000 pdf-tools
 ```
+
+### Alternative: Run Pre-built Image
+
+If you prefer not to build the image locally, you can pull and run the pre-built and hardened public image directly from Docker Hub or GHCR:
+
+**From Docker Hub:**
+```bash
+docker run -p 3000:3000 arungupta1526/pdf-tools:latest
+```
+
+**From GitHub Container Registry:**
+```bash
+docker run -p 3000:3000 ghcr.io/arungupta1526/pdf-tools:latest
+```
+
 
 ### What This Does
 
