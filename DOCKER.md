@@ -212,6 +212,16 @@ Even though a Node.js server serves the initial HTML and JS files, **all PDF man
 
 ---
 
+# 🛡️ Security & Hardening
+
+The production Docker image is built using **container hardening best practices** to minimize security vulnerability risk (CVEs) and keep the footprint small:
+
+- **Unprivileged User:** The application runs under a dedicated, unprivileged, non-root user (`nextjs:nodejs`).
+- **Minimal Footprint:** Unneeded package managers (`npm`, `yarn`, `corepack`) are completely removed from the final production image to reduce the attack surface.
+- **Privacy-First:** Zero file processing or storage occurs inside the container. All PDF manipulation runs entirely client-side in your web browser.
+
+---
+
 # ⚡ Quick Reference
 
 | Command                             | Description                 |
