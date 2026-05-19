@@ -32,8 +32,16 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-# Security hardening
-RUN addgroup -S nodejs -g 1001 && \
+# Security hardening: remove unused package managers to reduce attack surface, then add unprivileged user
+RUN rm -rf /usr/local/lib/node_modules/npm \
+           /usr/local/bin/npm \
+           /usr/local/bin/npx \
+           /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/corepack \
+           /opt/yarn* \
+           /usr/local/bin/yarn \
+           /usr/local/bin/yarnpkg && \
+    addgroup -S nodejs -g 1001 && \
     adduser -S nextjs -u 1001
 
 # Copy only production files
